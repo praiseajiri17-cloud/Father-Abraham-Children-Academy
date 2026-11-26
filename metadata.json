@@ -1,0 +1,6 @@
+{
+  "name": "Father Abraham Children Academy",
+  "description": "Official website and portal preview for Father Abraham Children Academy (Creche, Primary, Secondary).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
