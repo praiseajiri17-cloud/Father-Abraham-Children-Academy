@@ -36,3 +36,59 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #091C30;
 }
+
+/* ============================================================================
+   A4 Official Admission Form Print Styles
+   Ensures ONLY the A4 application form prints (never site navigation or portal UI)
+   ============================================================================ */
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+
+@media print {
+  html,
+  body {
+    background: #FFFFFF !important;
+    color: #091C30 !important;
+    width: 210mm;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body.printing-admission-form * {
+    visibility: hidden;
+  }
+
+  body.printing-admission-form #official-admission-print-root,
+  body.printing-admission-form #official-admission-print-root * {
+    visibility: visible;
+  }
+
+  body.printing-admission-form #official-admission-print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background: #FFFFFF !important;
+    box-shadow: none !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-page-break {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  .print-avoid-break {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}

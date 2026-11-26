@@ -13,6 +13,7 @@ import {
   GraduationCap,
   Building2,
   Database,
+  RefreshCw,
 } from 'lucide-react';
 import { PageHeader } from '../../components/common/PageHeader';
 import { SectionHeading } from '../../components/common/SectionHeading';
@@ -21,31 +22,50 @@ import { ALL_SYSTEM_ROLES } from '../../constants/roles';
 import { getSupabaseConfigStatus } from '../../lib/supabase';
 
 export const Portal: React.FC = () => {
-  const { user, authorization, signOut } = useAppAuth();
+  const { user, authorization, refreshAuthorization, signOut } = useAppAuth();
   const [showProfileManager, setShowProfileManager] = useState(false);
   const supabaseStatus = getSupabaseConfigStatus();
 
+  const isParentAuthorized =
+    authorization.isVerified && authorization.allRoles.includes('parent');
+  const isStaffAdminAuthorized =
+    authorization.isVerified &&
+    authorization.allRoles.some((r) =>
+      ['general_admin', 'principal', 'admission_officer', 'finance_officer', 'secretary'].includes(r)
+    );
+  const isTeacherAuthorized =
+    authorization.isVerified && authorization.allRoles.includes('teacher');
+
   const portalDestinations = [
     {
-      title: 'Parent / Guardian Portal',
+      title: 'Family & Parent Admissions Portal',
       path: '/portal/parent',
       roleCode: 'parent',
-      description: 'Future home for ward progress tracking, fee receipts, and parent circulars.',
+      isUnlocked: isParentAuthorized,
+      ctaLabel: isParentAuthorized ? 'Open Parent Admissions' : 'Requires Verified DB Session',
+      description:
+        'Start and manage online admission applications for all children under your family account, track payment status, and download official A4 PDFs.',
       icon: <Users className="w-6 h-6 text-[#D9B76A]" />,
+    },
+    {
+      title: 'Admissions & Administration Portal',
+      path: '/portal/admin',
+      roleCode: 'admission_officer / general_admin',
+      isUnlocked: isStaffAdminAuthorized,
+      ctaLabel: isStaffAdminAuthorized ? 'Open Admissions Workspace' : 'Staff Role Guarded',
+      description:
+        'Review applications, record physical document submissions, request corrections, approve or reject applicants, and manage institutional roles.',
+      icon: <Building2 className="w-6 h-6 text-[#D9B76A]" />,
     },
     {
       title: 'Teacher / Caregiver Portal',
       path: '/portal/teacher',
       roleCode: 'teacher',
-      description: 'Future home for attendance registers, continuous assessment, and class management.',
+      isUnlocked: isTeacherAuthorized,
+      ctaLabel: isTeacherAuthorized ? 'Open Teacher Portal' : 'Upcoming Academic Phase',
+      description:
+        'Reserved for future academic phases (attendance registers, continuous assessment, and class management). Blocked from admissions records.',
       icon: <GraduationCap className="w-6 h-6 text-[#D9B76A]" />,
-    },
-    {
-      title: 'Administration & Staff Portal',
-      path: '/portal/admin',
-      roleCode: 'general_admin / staff',
-      description: 'Future home for admissions approval, staff management, and financial oversight.',
-      icon: <Building2 className="w-6 h-6 text-[#D9B76A]" />,
     },
   ];
 
@@ -53,7 +73,7 @@ export const Portal: React.FC = () => {
     <div className="flex flex-col min-h-screen">
       <PageHeader
         title="Welcome to the School Portal"
-        subtitle="Authenticated gateway for Father Abraham Children Academy."
+        subtitle="Authenticated gateway for Father Abraham Children Academy Online Admissions & Governance."
         breadcrumbs={[{ name: 'School Portal' }]}
       />
 
@@ -85,6 +105,15 @@ export const Portal: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void refreshAuthorization()}
+                  className="inline-flex items-center gap-2 bg-[#F5F3ED] hover:bg-slate-200 text-[#102B46] px-4 py-2.5 rounded-xl font-bold text-sm transition-colors"
+                >
+                  <RefreshCw className={`w-4 h-4 ${authorization.isChecking ? 'animate-spin' : ''}`} />
+                  <span>Refresh Role</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setShowProfileManager((prev) => !prev)}
@@ -120,33 +149,55 @@ export const Portal: React.FC = () => {
               </div>
 
               <div className="bg-[#F5F3ED] rounded-2xl p-4 border border-slate-200 flex items-start gap-3">
-                <Database className={`w-5 h-5 shrink-0 mt-0.5 ${supabaseStatus.configured ? 'text-[#15803D]' : 'text-amber-700'}`} />
+                <Database
+                  className={`w-5 h-5 shrink-0 mt-0.5 ${
+                    supabaseStatus.configured ? 'text-[#15803D]' : 'text-amber-700'
+                  }`}
+                />
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-wider text-[#102B46]">
-                    Supabase Integration
+                    Supabase Database
                   </h3>
                   <p className="text-xs text-slate-600 mt-1 leading-relaxed">
                     {supabaseStatus.configured
-                      ? 'Supabase client configured with Clerk Third-Party Auth.'
-                      : 'Awaiting VITE_SUPABASE_URL & VITE_SUPABASE_PUBLISHABLE_KEY.'}
+                      ? 'Supabase configured with Clerk Third-Party Auth.'
+                      : 'Awaiting VITE_SUPABASE_URL & VITE_SUPABASE_PUBLISHABLE_KEY and migrations 0001–0011.'}
                   </p>
                 </div>
               </div>
 
-              <div className="bg-amber-50 rounded-2xl p-4 border border-amber-200 flex items-start gap-3">
-                <Clock className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+              <div
+                className={`rounded-2xl p-4 border flex items-start gap-3 ${
+                  authorization.isVerified
+                    ? 'bg-emerald-50 border-emerald-200'
+                    : 'bg-amber-50 border-amber-200'
+                }`}
+              >
+                {authorization.isVerified ? (
+                  <CheckCircle2 className="w-5 h-5 text-[#15803D] shrink-0 mt-0.5" />
+                ) : (
+                  <Clock className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                )}
                 <div>
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-amber-900">
-                    Authorization Status
+                  <h3
+                    className={`text-xs font-bold uppercase tracking-wider ${
+                      authorization.isVerified ? 'text-emerald-900' : 'text-amber-900'
+                    }`}
+                  >
+                    Verified Authorization
                   </h3>
-                  <p className="text-xs text-amber-800 mt-1 leading-relaxed">
-                    Verified Role:{' '}
+                  <p
+                    className={`text-xs mt-1 leading-relaxed ${
+                      authorization.isVerified ? 'text-emerald-800' : 'text-amber-800'
+                    }`}
+                  >
+                    Verified Role(s):{' '}
                     <strong>
-                      {authorization.isVerified && authorization.verifiedRole
-                        ? authorization.verifiedRole
-                        : 'Pending Server-Side Role Lookup'}
+                      {authorization.isVerified && authorization.allRoles.length > 0
+                        ? authorization.allRoles.join(', ')
+                        : 'Pending Database Verification'}
                     </strong>
-                    . Roles are never assigned on the client.
+                    {authorization.verificationError ? ` — ${authorization.verificationError}` : ''}
                   </p>
                 </div>
               </div>
@@ -179,12 +230,12 @@ export const Portal: React.FC = () => {
             </div>
           )}
 
-          {/* Protected Dashboard Routes Preview */}
+          {/* Portal Workspaces */}
           <div>
             <SectionHeading
-              subtitle="Protected Modules"
+              subtitle="Role-Verified Modules"
               title="Portal Workspaces"
-              description="Role-specific dashboards require server-side role verification through Supabase in Phase 3."
+              description="Access is authorized directly from Supabase PostgreSQL records and Row Level Security."
               centered={false}
             />
 
@@ -199,9 +250,15 @@ export const Portal: React.FC = () => {
                       {dest.icon}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-800 border border-amber-200">
-                        <Lock className="w-3 h-3" /> Role Guarded
-                      </span>
+                      {dest.isUnlocked ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-emerald-50 text-[#15803D] border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3" /> Verified Access
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-800 border border-amber-200">
+                          <Lock className="w-3 h-3" /> Role Guarded
+                        </span>
+                      )}
                     </div>
                     <h3 className="text-xl font-bold text-[#102B46] font-['Manrope']">
                       {dest.title}
@@ -211,9 +268,13 @@ export const Portal: React.FC = () => {
 
                   <NavLink
                     to={dest.path}
-                    className="inline-flex items-center justify-between w-full bg-[#F5F3ED] hover:bg-[#102B46] hover:text-white text-[#102B46] px-4 py-3 rounded-xl font-bold text-sm transition-colors"
+                    className={`inline-flex items-center justify-between w-full px-4 py-3 rounded-xl font-bold text-sm transition-colors ${
+                      dest.isUnlocked
+                        ? 'bg-[#102B46] hover:bg-[#091C30] text-white'
+                        : 'bg-[#F5F3ED] hover:bg-[#102B46] hover:text-white text-[#102B46]'
+                    }`}
                   >
-                    <span>Open Route Check</span>
+                    <span>{dest.ctaLabel}</span>
                     <ArrowRight className="w-4 h-4 text-[#D9B76A]" />
                   </NavLink>
                 </div>
@@ -221,14 +282,13 @@ export const Portal: React.FC = () => {
             </div>
           </div>
 
-          {/* Authorization Architecture Reference Table */}
+          {/* Institutional Role Reference Matrix */}
           <div className="bg-white rounded-3xl shadow-md border border-slate-200 p-6 sm:p-8">
             <h3 className="text-lg sm:text-xl font-extrabold text-[#102B46] font-['Manrope'] mb-2">
-              Planned Institutional Roles (Phase 3+ Authorization Matrix)
+              Institutional Access Control Roles
             </h3>
             <p className="text-xs sm:text-sm text-slate-600 mb-6">
-              These roles define the future access control model. Only verified backend records in
-              Supabase can grant access to privileged modules.
+              Only verified database records in Supabase can grant staff or administrative access.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {ALL_SYSTEM_ROLES.map((r) => (

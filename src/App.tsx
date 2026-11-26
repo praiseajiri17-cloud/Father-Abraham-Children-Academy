@@ -129,6 +129,22 @@ export default function App() {
                   </ProtectedRoute>
                 }
               />
+              <Route
+                path="/portal/admissions"
+                element={
+                  <ProtectedRoute
+                    requiredRoles={[
+                      'general_admin',
+                      'principal',
+                      'admission_officer',
+                      'secretary',
+                    ]}
+                    sectionTitle="Admissions Management Portal"
+                  >
+                    <AdminPortal />
+                  </ProtectedRoute>
+                }
+              />
             </Routes>
           </main>
 

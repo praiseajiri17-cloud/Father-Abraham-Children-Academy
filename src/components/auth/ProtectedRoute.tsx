@@ -1,6 +1,6 @@
 import React from 'react';
 import { Navigate, NavLink, useLocation } from 'react-router-dom';
-import { ShieldAlert, Loader2, LogOut, ArrowLeft, Lock } from 'lucide-react';
+import { ShieldAlert, Loader2, LogOut, ArrowLeft, Lock, Database } from 'lucide-react';
 import { useAppAuth } from '../../context/AuthContext';
 import { SystemRole } from '../../types/auth';
 import { SYSTEM_ROLE_DEFINITIONS } from '../../constants/roles';
@@ -38,13 +38,15 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     );
   }
 
-  // 2. Loading Clerk session
-  if (!isLoaded) {
+  // 2. Loading Clerk session or resolving verified Supabase roles
+  if (!isLoaded || (isSignedIn && authorization.isChecking)) {
     return (
       <div className="min-h-[70vh] flex flex-col items-center justify-center gap-4 px-4 bg-[#F5F3ED]">
         <Loader2 className="w-10 h-10 text-[#102B46] animate-spin" />
         <p className="text-sm font-semibold text-[#102B46] font-['Manrope']">
-          Verifying your portal session...
+          {!isLoaded
+            ? 'Verifying your portal session...'
+            : 'Verifying institutional permissions...'}
         </p>
       </div>
     );
@@ -59,13 +61,18 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   if (requiredRoles && requiredRoles.length > 0) {
     const hasVerifiedPermission =
       authorization.isVerified &&
-      authorization.verifiedRole !== null &&
-      requiredRoles.includes(authorization.verifiedRole);
+      (authorization.allRoles.some((role) => requiredRoles.includes(role)) ||
+        (authorization.verifiedRole !== null &&
+          requiredRoles.includes(authorization.verifiedRole)));
 
     if (!hasVerifiedPermission) {
       const requiredLabels = requiredRoles
         .map((r) => SYSTEM_ROLE_DEFINITIONS[r]?.label || r)
         .join(', ');
+
+      const isDbMissing =
+        authorization.verificationSource === 'supabase_unconfigured' ||
+        authorization.verificationSource === 'unconnected_phase_2';
 
       return (
         <div className="flex flex-col min-h-screen">
@@ -77,11 +84,13 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
           <section className="py-16 px-4 sm:px-6 lg:px-8 bg-[#F5F3ED] flex-1">
             <div className="max-w-2xl mx-auto bg-white rounded-3xl shadow-xl border border-slate-200 p-6 sm:p-10 text-center flex flex-col items-center gap-5">
               <div className="w-16 h-16 rounded-2xl bg-[#102B46] text-[#D9B76A] flex items-center justify-center shadow-md">
-                <Lock className="w-8 h-8" />
+                {isDbMissing ? <Database className="w-8 h-8" /> : <Lock className="w-8 h-8" />}
               </div>
 
               <span className="px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-widest bg-amber-500/10 text-amber-800 border border-amber-200">
-                Server-Side Authorization Pending
+                {isDbMissing
+                  ? 'Database Configuration & Migrations Required'
+                  : 'Verified Role Authorization Required'}
               </span>
 
               <h2 className="text-2xl sm:text-3xl font-extrabold text-[#102B46] font-['Manrope']">
@@ -93,17 +102,44 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
                 <strong className="text-[#102B46]">
                   {user?.fullName || user?.primaryEmail || 'Authenticated User'}
                 </strong>
-                . However, accessing <strong>{sectionTitle}</strong> requires verified server-side
-                permission for: <span className="font-semibold text-[#102B46]">{requiredLabels}</span>.
+                . Accessing <strong>{sectionTitle}</strong> requires verified database
+                permission for:{' '}
+                <span className="font-semibold text-[#102B46]">{requiredLabels}</span>.
               </p>
 
               <div className="w-full bg-[#F5F3ED] border border-slate-200 rounded-2xl p-5 text-left flex items-start gap-3">
                 <ShieldAlert className="w-5 h-5 text-[#102B46] shrink-0 mt-0.5" />
-                <div className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-                  <strong>Security Notice (Phase 2):</strong> Authentication is active through Clerk,
-                  while authoritative institutional role verification and Row Level Security will be
-                  connected to <strong>Supabase</strong> in Phase 3. Roles cannot be assigned from
-                  the browser.
+                <div className="text-xs sm:text-sm text-slate-700 leading-relaxed space-y-1">
+                  {isDbMissing ? (
+                    <>
+                      <p>
+                        <strong>Supabase Setup Pending:</strong> Configure{' '}
+                        <code className="font-mono">VITE_SUPABASE_URL</code> and{' '}
+                        <code className="font-mono">VITE_SUPABASE_PUBLISHABLE_KEY</code> and apply
+                        database migrations <code className="font-mono">0001</code>–
+                        <code className="font-mono">0011</code> so server-side role verification and
+                        admissions persistence can operate.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p>
+                        <strong>Access Restricted:</strong> Your verified role(s):{' '}
+                        <code className="font-mono">
+                          {authorization.allRoles.length > 0
+                            ? authorization.allRoles.join(', ')
+                            : 'none'}
+                        </code>
+                        . Roles can only be assigned by the General Administrator through verified
+                        server-side records.
+                      </p>
+                      {authorization.verificationError && (
+                        <p className="text-red-700 font-medium pt-1">
+                          Database note: {authorization.verificationError}
+                        </p>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
 

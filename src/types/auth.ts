@@ -1,10 +1,10 @@
 /**
- * Proposed system roles for Father Abraham Children Academy.
+ * Official system roles for Father Abraham Children Academy.
  *
  * SECURITY BOUNDARY:
- * These roles are authoritative only when verified server-side via Supabase
- * in Phase 3+. Frontend state, localStorage, URL parameters, or email domain
- * patterns must NEVER be treated as proof of authorization.
+ * These roles are authoritative only when verified server-side via Supabase.
+ * Frontend state, localStorage, URL parameters, or email domain patterns
+ * must NEVER be treated as proof of authorization.
  */
 export type SystemRole =
   | 'general_admin'
@@ -50,17 +50,20 @@ export interface AuthenticationState {
 /**
  * Authorization state answers: "What is this person permitted to do?"
  * Kept strictly separate from authentication.
- * In Phase 2, authoritative verification is not yet connected to Supabase,
- * so verifiedRole remains null and isVerified remains false.
  */
 export interface AuthorizationState {
   isVerified: boolean;
+  isChecking: boolean;
+  profileId: string | null;
   verifiedRole: SystemRole | null;
+  allRoles: SystemRole[];
   permissions: string[];
-  verificationSource: 'unconnected_phase_2' | 'supabase_verified';
+  verificationSource: 'unconnected_phase_2' | 'supabase_unconfigured' | 'supabase_verified';
+  verificationError: string | null;
 }
 
 export interface AppAuthContextValue extends AuthenticationState {
   authorization: AuthorizationState;
+  refreshAuthorization: () => Promise<void>;
   signOut: () => Promise<void>;
 }
