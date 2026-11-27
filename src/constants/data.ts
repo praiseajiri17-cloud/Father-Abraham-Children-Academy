@@ -5,16 +5,6 @@ export const SCHOOL_INFO = {
   shortName: 'FACA',
   tagline: 'Building Bright Futures, One Child at a Time',
   levels: 'CRECHE | PRIMARY | SECONDARY',
-  address: 'Plot 12-14 Abraham Avenue, GRA Extension, Academic District',
-  phone: '+234 800 123 4567',
-  email: 'info@fatherabrahamacademy.edu.ng',
-  hours: 'Monday - Friday: 7:30 AM - 4:00 PM',
-  socials: {
-    facebook: '#',
-    twitter: '#',
-    instagram: '#',
-    linkedin: '#'
-  }
 };
 
 export const NEWS_ITEMS: NewsItem[] = [

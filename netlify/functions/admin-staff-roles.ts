@@ -6,7 +6,12 @@ import {
 } from './_shared/serverClients';
 
 interface StaffRoleActionPayload {
-  action?: 'assign_role' | 'revoke_role' | 'update_admission_settings';
+  action?:
+    | 'assign_role'
+    | 'revoke_role'
+    | 'update_admission_settings'
+    | 'update_public_contact_info'
+    | 'update_public_announcement';
   targetEmail?: string;
   targetProfileId?: string;
   roleCode?: string;
@@ -20,9 +25,24 @@ interface StaffRoleActionPayload {
     application_fee_kobo?: number | null;
     physical_submission_instructions?: string;
   };
+  publicContactInfo?: {
+    configured?: boolean;
+    address?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    hours?: string | null;
+    whatsapp_url?: string | null;
+  };
+  publicAnnouncement?: {
+    is_active?: boolean;
+    badge?: string;
+    message?: string;
+    cta_label?: string;
+    cta_path?: string;
+  };
 }
 
-const ASSIGNABLE_STAFF_ROLES = new Set([
+const STANDARD_STAFF_ROLES = new Set([
   'principal',
   'admission_officer',
   'finance_officer',
@@ -35,8 +55,10 @@ const ASSIGNABLE_STAFF_ROLES = new Set([
  *
  * Security Rules:
  * - Requires verified Clerk Bearer session token.
- * - Verifies caller holds active 'general_admin' role (or 'staff.manage' / 'audit.read' for GET).
- * - Never trusts client-supplied roles; logs all mutations into public.audit_logs.
+ * - Verifies caller holds active 'general_admin' role (or 'staff.manage' / 'audit.read' / 'settings.manage').
+ * - Protects the locked primary school owner's `general_admin` role from revocation.
+ * - Blocks staff from elevating themselves to `general_admin` unless caller is already `general_admin`.
+ * - Logs all settings & role mutations into immutable public.audit_logs.
  */
 export default async function handler(req: Request): Promise<Response> {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -70,6 +92,7 @@ export default async function handler(req: Request): Promise<Response> {
               .from('staff')
               .select(`
                 id,
+                profile_id,
                 staff_number,
                 job_title,
                 department,
@@ -107,7 +130,6 @@ export default async function handler(req: Request): Promise<Response> {
       });
     }
 
-    // POST mutations require General Administrator or explicit staff.manage / settings.manage
     const payload = (await req.json()) as StaffRoleActionPayload;
 
     if (payload.action === 'update_admission_settings') {
@@ -163,12 +185,135 @@ export default async function handler(req: Request): Promise<Response> {
       return jsonResponse({ status: 'ok', admissionSettings: settingValue });
     }
 
-    if (!caller.isGeneralAdmin && !caller.permissions.includes('staff.manage')) {
+    if (payload.action === 'update_public_contact_info') {
+      if (!caller.isGeneralAdmin && !caller.permissions.includes('settings.manage')) {
+        return jsonResponse({ error: 'Forbidden: Settings management permission required.' }, 403);
+      }
+      const raw = payload.publicContactInfo ?? {};
+      const address = raw.address?.trim() || null;
+      const phone = raw.phone?.trim() || null;
+      const email = raw.email?.trim() || null;
+      const hours = raw.hours?.trim() || null;
+      const rawWhatsapp = raw.whatsapp_url?.trim() || null;
+      let whatsappUrl: string | null = null;
+      if (rawWhatsapp) {
+        try {
+          const parsed = new URL(rawWhatsapp);
+          if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+            whatsappUrl = parsed.toString();
+          } else {
+            return jsonResponse({ error: 'WhatsApp URL must use https:// or http://.' }, 400);
+          }
+        } catch {
+          return jsonResponse({ error: 'Invalid WhatsApp URL format.' }, 400);
+        }
+      }
+      const configured = Boolean(address || phone || email || hours);
+
+      const settingValue = {
+        configured,
+        address,
+        phone,
+        email,
+        hours,
+        whatsapp_url: whatsappUrl,
+      };
+
+      const { data: oldSetting } = await supabase
+        .from('school_settings')
+        .select('setting_value')
+        .eq('setting_key', 'public_contact_info')
+        .maybeSingle();
+
+      const { error: upsertErr } = await supabase.from('school_settings').upsert({
+        setting_key: 'public_contact_info',
+        setting_value: settingValue,
+        is_public: true,
+        updated_by_profile_id: caller.profileId,
+      });
+
+      if (upsertErr) {
+        return jsonResponse({ error: upsertErr.message }, 400);
+      }
+
+      await supabase.from('audit_logs').insert({
+        actor_profile_id: caller.profileId,
+        actor_clerk_user_id: caller.clerkUserId,
+        action: 'settings.public_contact_updated',
+        entity_type: 'school_settings',
+        entity_id: 'public_contact_info',
+        old_values: oldSetting?.setting_value ?? null,
+        new_values: settingValue,
+      });
+
+      return jsonResponse({ status: 'ok', publicContactInfo: settingValue });
+    }
+
+    if (payload.action === 'update_public_announcement') {
+      if (
+        !caller.isGeneralAdmin &&
+        !caller.permissions.includes('settings.manage') &&
+        !caller.permissions.includes('communication.manage')
+      ) {
+        return jsonResponse({ error: 'Forbidden: Communication or settings permission required.' }, 403);
+      }
+      const raw = payload.publicAnnouncement ?? {};
+      const message = raw.message?.trim() || '';
+      const rawPath = raw.cta_path?.trim() || '/apply';
+      const safePath = rawPath.startsWith('/') && !rawPath.startsWith('//') ? rawPath : '/apply';
+
+      const settingValue = {
+        is_active: Boolean(raw.is_active && message),
+        badge: raw.badge?.trim() || 'Notice',
+        message,
+        cta_label: raw.cta_label?.trim() || 'Apply Now',
+        cta_path: safePath,
+      };
+
+      const { data: oldSetting } = await supabase
+        .from('school_settings')
+        .select('setting_value')
+        .eq('setting_key', 'public_announcement')
+        .maybeSingle();
+
+      const { error: upsertErr } = await supabase.from('school_settings').upsert({
+        setting_key: 'public_announcement',
+        setting_value: settingValue,
+        is_public: true,
+        updated_by_profile_id: caller.profileId,
+      });
+
+      if (upsertErr) {
+        return jsonResponse({ error: upsertErr.message }, 400);
+      }
+
+      await supabase.from('audit_logs').insert({
+        actor_profile_id: caller.profileId,
+        actor_clerk_user_id: caller.clerkUserId,
+        action: 'settings.public_announcement_updated',
+        entity_type: 'school_settings',
+        entity_id: 'public_announcement',
+        old_values: oldSetting?.setting_value ?? null,
+        new_values: settingValue,
+      });
+
+      return jsonResponse({ status: 'ok', publicAnnouncement: settingValue });
+    }
+
+    if (!canManageStaff) {
       return jsonResponse({ error: 'Forbidden: General Administrator permission required.' }, 403);
     }
 
     const roleCode = payload.roleCode?.trim();
-    if (!roleCode || !ASSIGNABLE_STAFF_ROLES.has(roleCode)) {
+    if (!roleCode) {
+      return jsonResponse({ error: 'roleCode is required.' }, 400);
+    }
+
+    if (roleCode === 'general_admin' && !caller.isGeneralAdmin) {
+      return jsonResponse({ error: 'Forbidden: Only General Administrator may manage general_admin role.' }, 403);
+    }
+
+    if (roleCode !== 'general_admin' && !STANDARD_STAFF_ROLES.has(roleCode)) {
       return jsonResponse({ error: 'Invalid or unsupported staff role code.' }, 400);
     }
 
@@ -187,10 +332,33 @@ export default async function handler(req: Request): Promise<Response> {
       return jsonResponse(
         {
           error:
-            'Target user profile not found. The staff member must sign into the portal at least once first so their Clerk profile exists.',
+            'Target user profile not found. The staff member must sign into the portal at least once first so their profile exists.',
         },
         404
       );
+    }
+
+    // Protect locked primary school owner from accidental general_admin revocation
+    if (payload.action === 'revoke_role' && roleCode === 'general_admin') {
+      const { data: ownerState } = await supabase
+        .from('owner_provisioning_state')
+        .select('is_owner_provisioned, owner_profile_id')
+        .eq('id', true)
+        .maybeSingle();
+
+      if (ownerState?.is_owner_provisioned && ownerState.owner_profile_id === targetProfileId) {
+        return jsonResponse(
+          { error: 'The primary school owner’s general_admin role cannot be revoked.' },
+          403
+        );
+      }
+
+      if (targetProfileId === caller.profileId) {
+        return jsonResponse(
+          { error: 'You cannot revoke your own general_admin authority.' },
+          403
+        );
+      }
     }
 
     const { data: roleRow } = await supabase
@@ -247,6 +415,15 @@ export default async function handler(req: Request): Promise<Response> {
         return jsonResponse({ error: revokeErr.message }, 400);
       }
 
+      await supabase.from('audit_logs').insert({
+        actor_profile_id: caller.profileId,
+        actor_clerk_user_id: caller.clerkUserId,
+        action: 'staff_role.revoked',
+        entity_type: 'staff_roles',
+        entity_id: staffRow.id,
+        new_values: { target_profile_id: targetProfileId, role_code: roleCode },
+      });
+
       return jsonResponse({ status: 'ok', action: 'revoked', roleCode });
     }
 
@@ -259,7 +436,7 @@ export default async function handler(req: Request): Promise<Response> {
         assigned_by_profile_id: caller.profileId,
         assigned_at: new Date().toISOString(),
         revoked_at: null,
-        notes: payload.notes?.trim() || `Assigned by General Administrator`,
+        notes: payload.notes?.trim() || 'Assigned by General Administrator',
       },
       { onConflict: 'staff_id,role_id' }
     );
@@ -267,6 +444,15 @@ export default async function handler(req: Request): Promise<Response> {
     if (assignErr) {
       return jsonResponse({ error: assignErr.message }, 400);
     }
+
+    await supabase.from('audit_logs').insert({
+      actor_profile_id: caller.profileId,
+      actor_clerk_user_id: caller.clerkUserId,
+      action: 'staff_role.assigned',
+      entity_type: 'staff_roles',
+      entity_id: staffRow.id,
+      new_values: { target_profile_id: targetProfileId, role_code: roleCode },
+    });
 
     return jsonResponse({ status: 'ok', action: 'assigned', roleCode });
   } catch (err) {

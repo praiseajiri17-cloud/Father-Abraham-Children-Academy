@@ -1,44 +1,75 @@
 import React, { useState } from 'react';
 import { PageHeader } from '../../components/common/PageHeader';
-import { SectionHeading } from '../../components/common/SectionHeading';
-import { SCHOOL_INFO } from '../../constants/data';
 import { ContactFormValues } from '../../types';
 import { Phone, Mail, MapPin, Clock, Send, CheckCircle2, AlertCircle } from 'lucide-react';
+import { usePublicSchoolSettings } from '../../hooks/usePublicSchoolSettings';
+import { createPublicSupabaseClient } from '../../lib/supabase';
+import { SCHOOL_INFO } from '../../constants/data';
 
 export const Contact: React.FC = () => {
+  const { contactInfo } = usePublicSchoolSettings();
   const [formData, setFormData] = useState<ContactFormValues>({
     name: '',
     email: '',
     phone: '',
     subject: '',
-    message: ''
+    message: '',
   });
   const [submitted, setSubmitted] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const hasVerifiedContact = Boolean(
+    contactInfo?.configured &&
+      (contactInfo.address || contactInfo.phone || contactInfo.email || contactInfo.hours)
+  );
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.email || !formData.message) {
+    if (!formData.name.trim() || !formData.email.trim() || !formData.message.trim()) {
       setError('Please fill in all required fields.');
       return;
     }
     setError('');
-    setSubmitted(true);
+    setIsSending(true);
+    try {
+      const supabase = createPublicSupabaseClient();
+      if (supabase) {
+        const { error: insertErr } = await supabase.from('contact_enquiries').insert({
+          sender_name: formData.name.trim(),
+          sender_email: formData.email.trim(),
+          sender_phone: formData.phone.trim() || null,
+          subject: formData.subject.trim() || null,
+          message: formData.message.trim(),
+        });
+        if (insertErr) {
+          throw new Error(insertErr.message);
+        }
+      }
+      setSubmitted(true);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Unable to send your message right now. Please try again shortly.'
+      );
+    } finally {
+      setIsSending(false);
+    }
   };
 
   return (
     <div className="flex flex-col min-h-screen">
       <PageHeader
         title="Contact Us"
-        subtitle="Get in touch with our administrative office for inquiries, campus visits, or admissions assistance."
+        subtitle={`Get in touch with ${SCHOOL_INFO.name} for inquiries, campus visits, or admissions assistance.`}
         breadcrumbs={[{ name: 'Contact' }]}
       />
 
       <section className="py-20 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
-            
-            {/* Contact Information & Map placeholder */}
+            {/* Contact Information */}
             <div className="lg:col-span-5 flex flex-col gap-8">
               <div>
                 <span className="px-3.5 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest bg-[#102B46]/10 text-[#102B46] mb-3 inline-block">
@@ -48,52 +79,88 @@ export const Contact: React.FC = () => {
                   We Would Love to Hear From You
                 </h2>
                 <p className="text-slate-600 text-sm leading-relaxed">
-                  Whether you have questions about our curriculum, admission requirements, or wish to schedule a campus tour, our friendly team is ready to assist you.
+                  Whether you have questions about our curriculum, admission requirements, or
+                  wish to schedule a campus tour, send us a message using the enquiry form.
                 </p>
               </div>
 
-              <div className="flex flex-col gap-6">
-                <div className="flex items-start gap-4 bg-[#F5F3ED] p-5 rounded-2xl border border-slate-200">
-                  <div className="w-12 h-12 rounded-xl bg-[#102B46] text-[#D9B76A] flex items-center justify-center shrink-0">
-                    <MapPin className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-[#102B46] uppercase font-['Manrope'] mb-1">Physical Address</h4>
-                    <p className="text-xs text-slate-600 leading-relaxed">{SCHOOL_INFO.address}</p>
-                  </div>
-                </div>
+              {hasVerifiedContact ? (
+                <div className="flex flex-col gap-6">
+                  {contactInfo?.address && (
+                    <div className="flex items-start gap-4 bg-[#F5F3ED] p-5 rounded-2xl border border-slate-200">
+                      <div className="w-12 h-12 rounded-xl bg-[#102B46] text-[#D9B76A] flex items-center justify-center shrink-0">
+                        <MapPin className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-[#102B46] uppercase font-['Manrope'] mb-1">
+                          Physical Address
+                        </h4>
+                        <p className="text-xs text-slate-600 leading-relaxed">
+                          {contactInfo.address}
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
-                <div className="flex items-start gap-4 bg-[#F5F3ED] p-5 rounded-2xl border border-slate-200">
-                  <div className="w-12 h-12 rounded-xl bg-[#102B46] text-[#D9B76A] flex items-center justify-center shrink-0">
-                    <Phone className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-[#102B46] uppercase font-['Manrope'] mb-1">Phone Number</h4>
-                    <a href={`tel:${SCHOOL_INFO.phone}`} className="text-xs text-slate-600 hover:text-[#102B46] font-medium">{SCHOOL_INFO.phone}</a>
-                  </div>
-                </div>
+                  {contactInfo?.phone && (
+                    <div className="flex items-start gap-4 bg-[#F5F3ED] p-5 rounded-2xl border border-slate-200">
+                      <div className="w-12 h-12 rounded-xl bg-[#102B46] text-[#D9B76A] flex items-center justify-center shrink-0">
+                        <Phone className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-[#102B46] uppercase font-['Manrope'] mb-1">
+                          Phone Number
+                        </h4>
+                        <a
+                          href={`tel:${contactInfo.phone}`}
+                          className="text-xs text-slate-600 hover:text-[#102B46] font-medium"
+                        >
+                          {contactInfo.phone}
+                        </a>
+                      </div>
+                    </div>
+                  )}
 
-                <div className="flex items-start gap-4 bg-[#F5F3ED] p-5 rounded-2xl border border-slate-200">
-                  <div className="w-12 h-12 rounded-xl bg-[#102B46] text-[#D9B76A] flex items-center justify-center shrink-0">
-                    <Mail className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-[#102B46] uppercase font-['Manrope'] mb-1">Email Address</h4>
-                    <a href={`mailto:${SCHOOL_INFO.email}`} className="text-xs text-slate-600 hover:text-[#102B46] font-medium">{SCHOOL_INFO.email}</a>
-                  </div>
-                </div>
+                  {contactInfo?.email && (
+                    <div className="flex items-start gap-4 bg-[#F5F3ED] p-5 rounded-2xl border border-slate-200">
+                      <div className="w-12 h-12 rounded-xl bg-[#102B46] text-[#D9B76A] flex items-center justify-center shrink-0">
+                        <Mail className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-[#102B46] uppercase font-['Manrope'] mb-1">
+                          Email Address
+                        </h4>
+                        <a
+                          href={`mailto:${contactInfo.email}`}
+                          className="text-xs text-slate-600 hover:text-[#102B46] font-medium"
+                        >
+                          {contactInfo.email}
+                        </a>
+                      </div>
+                    </div>
+                  )}
 
-                <div className="flex items-start gap-4 bg-[#F5F3ED] p-5 rounded-2xl border border-slate-200">
-                  <div className="w-12 h-12 rounded-xl bg-[#102B46] text-[#D9B76A] flex items-center justify-center shrink-0">
-                    <Clock className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-[#102B46] uppercase font-['Manrope'] mb-1">Opening Hours</h4>
-                    <p className="text-xs text-slate-600">{SCHOOL_INFO.hours}</p>
-                  </div>
+                  {contactInfo?.hours && (
+                    <div className="flex items-start gap-4 bg-[#F5F3ED] p-5 rounded-2xl border border-slate-200">
+                      <div className="w-12 h-12 rounded-xl bg-[#102B46] text-[#D9B76A] flex items-center justify-center shrink-0">
+                        <Clock className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-[#102B46] uppercase font-['Manrope'] mb-1">
+                          Opening Hours
+                        </h4>
+                        <p className="text-xs text-slate-600">{contactInfo.hours}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-
+              ) : (
+                <div className="bg-[#F5F3ED] p-6 rounded-2xl border border-slate-200 text-sm text-slate-600 leading-relaxed">
+                  Direct campus phone, email, and office address details will appear here once
+                  published in School Settings. In the meantime, please submit your enquiry via the
+                  form.
+                </div>
+              )}
             </div>
 
             {/* Contact Form */}
@@ -105,23 +172,26 @@ export const Contact: React.FC = () => {
               {submitted ? (
                 <div className="bg-emerald-50 border border-emerald-200 p-8 rounded-2xl text-center flex flex-col items-center gap-4 animate-fadeIn">
                   <CheckCircle2 className="w-16 h-16 text-[#15803D]" />
-                  <h4 className="text-2xl font-bold text-[#102B46] font-['Manrope']">Message Sent Successfully!</h4>
+                  <h4 className="text-2xl font-bold text-[#102B46] font-['Manrope']">
+                    Message Received!
+                  </h4>
                   <p className="text-slate-600 text-sm max-w-md leading-relaxed">
-                    Thank you, <strong>{formData.name}</strong>. Your message has been received by our administrative office.
+                    Thank you, <strong>{formData.name}</strong>. Your message has been submitted to
+                    our school administration desk.
                   </p>
-                  <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl text-xs text-amber-800 flex items-center gap-2 mt-2">
-                    <AlertCircle className="w-5 h-5 shrink-0 text-amber-600" />
-                    <span>Phase 1 Notice: Message routing via backend API will be enabled in Phase 2.</span>
-                  </div>
                   <button
-                    onClick={() => { setSubmitted(false); setFormData({ name: '', email: '', phone: '', subject: '', message: '' }); }}
+                    type="button"
+                    onClick={() => {
+                      setSubmitted(false);
+                      setFormData({ name: '', email: '', phone: '', subject: '', message: '' });
+                    }}
                     className="mt-4 bg-[#102B46] text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-[#091C30]"
                   >
                     Send Another Message
                   </button>
                 </div>
               ) : (
-                <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+                <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-col gap-6">
                   {error && (
                     <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-sm flex items-center gap-2">
                       <AlertCircle className="w-5 h-5 shrink-0" />
@@ -139,7 +209,7 @@ export const Contact: React.FC = () => {
                         required
                         value={formData.name}
                         onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                        placeholder="e.g. John Doe"
+                        placeholder="e.g. Mr. / Mrs. Adewale"
                         className="px-4 py-3 rounded-xl bg-white border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#102B46] text-sm"
                       />
                     </div>
@@ -153,7 +223,7 @@ export const Contact: React.FC = () => {
                         required
                         value={formData.email}
                         onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                        placeholder="e.g. john@example.com"
+                        placeholder="e.g. parent@example.com"
                         className="px-4 py-3 rounded-xl bg-white border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#102B46] text-sm"
                       />
                     </div>
@@ -168,7 +238,7 @@ export const Contact: React.FC = () => {
                         type="tel"
                         value={formData.phone}
                         onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                        placeholder="e.g. +234 800 000 0000"
+                        placeholder="e.g. +234 ..."
                         className="px-4 py-3 rounded-xl bg-white border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#102B46] text-sm"
                       />
                     </div>
@@ -181,7 +251,7 @@ export const Contact: React.FC = () => {
                         type="text"
                         value={formData.subject}
                         onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
-                        placeholder="e.g. Campus Tour Booking"
+                        placeholder="e.g. Campus Tour Inquiry"
                         className="px-4 py-3 rounded-xl bg-white border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#102B46] text-sm"
                       />
                     </div>
@@ -203,32 +273,18 @@ export const Contact: React.FC = () => {
 
                   <button
                     type="submit"
-                    className="w-full bg-[#102B46] hover:bg-[#091C30] text-white py-4 rounded-xl font-extrabold text-base shadow-lg transition-all flex items-center justify-center gap-2"
+                    disabled={isSending}
+                    className="w-full bg-[#102B46] hover:bg-[#091C30] text-white py-4 rounded-xl font-extrabold text-base shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-60"
                   >
-                    <span>Send Message</span>
+                    <span>{isSending ? 'Sending...' : 'Send Message'}</span>
                     <Send className="w-5 h-5 text-[#D9B76A]" />
                   </button>
                 </form>
               )}
             </div>
-
           </div>
         </div>
       </section>
-
-      {/* Map Placeholder */}
-      <section className="bg-slate-200 h-96 relative flex items-center justify-center">
-        <div className="absolute inset-0 opacity-40 bg-[radial-gradient(#102B46_1px,transparent_1px)] [background-size:20px_20px]"></div>
-        <div className="relative z-10 bg-white/90 backdrop-blur-md p-8 rounded-3xl shadow-xl text-center max-w-md mx-4 border border-slate-300">
-          <MapPin className="w-10 h-10 text-[#102B46] mx-auto mb-3 animate-bounce" />
-          <h4 className="text-lg font-bold text-[#102B46] font-['Manrope'] mb-1">Father Abraham Children Academy</h4>
-          <p className="text-xs text-slate-600 mb-4">{SCHOOL_INFO.address}</p>
-          <span className="inline-block bg-[#D9B76A] text-[#102B46] text-xs font-bold px-4 py-1.5 rounded-full uppercase tracking-wider">
-            Interactive Campus Map Placeholder
-          </span>
-        </div>
-      </section>
-
     </div>
   );
 };

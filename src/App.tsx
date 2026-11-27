@@ -29,6 +29,8 @@ import { Register } from './pages/Portal/Register';
 import { ParentPortal } from './pages/Portal/ParentPortal';
 import { TeacherPortal } from './pages/Portal/TeacherPortal';
 import { AdminPortal } from './pages/Portal/AdminPortal';
+import { AdmissionsPortal } from './pages/Portal/AdmissionsPortal';
+import { ApplyEntry } from './pages/Apply/ApplyEntry';
 
 // Scroll to top on route change helper
 const ScrollToTop: React.FC = () => {
@@ -50,7 +52,7 @@ export default function App() {
 
           <main className="flex-1">
             <Routes>
-              {/* Public Website Routes (unrestricted) */}
+              {/* Public Website Routes */}
               <Route path="/" element={<Home />} />
               <Route path="/about" element={<About />} />
               <Route path="/academics" element={<Academics />} />
@@ -62,6 +64,8 @@ export default function App() {
               <Route path="/news" element={<News />} />
               <Route path="/gallery" element={<Gallery />} />
               <Route path="/contact" element={<Contact />} />
+              <Route path="/apply" element={<ApplyEntry />} />
+              <Route path="/portal/apply" element={<ApplyEntry />} />
 
               {/* Authentication Routes */}
               <Route
@@ -81,21 +85,71 @@ export default function App() {
                 }
               />
 
-              {/* Protected Portal Routes */}
-              <Route
-                path="/portal"
-                element={
-                  <ProtectedRoute sectionTitle="School Portal">
-                    <Portal />
-                  </ProtectedRoute>
-                }
-              />
+              {/* School Portal Entry (unauthenticated Sign-In + automatic role redirect) */}
+              <Route path="/portal/*" element={<Portal />} />
+
+              {/* Role-Protected Parent Admissions & Family Portal Routes */}
               <Route
                 path="/portal/parent"
                 element={
                   <ProtectedRoute
                     requiredRoles={['parent']}
                     sectionTitle="Parent & Guardian Portal"
+                  >
+                    <ParentPortal />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/portal/parent/applications"
+                element={
+                  <ProtectedRoute
+                    requiredRoles={['parent']}
+                    sectionTitle="Parent Applications"
+                  >
+                    <ParentPortal />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/portal/parent/applications/new"
+                element={
+                  <ProtectedRoute
+                    requiredRoles={['parent']}
+                    sectionTitle="New Child Admission Application"
+                  >
+                    <ParentPortal />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/portal/parent/applications/:id"
+                element={
+                  <ProtectedRoute
+                    requiredRoles={['parent']}
+                    sectionTitle="Admission Application Details"
+                  >
+                    <ParentPortal />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/portal/parent/payments"
+                element={
+                  <ProtectedRoute
+                    requiredRoles={['parent']}
+                    sectionTitle="Parent Payments & Fee History"
+                  >
+                    <ParentPortal />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/portal/parent/profile"
+                element={
+                  <ProtectedRoute
+                    requiredRoles={['parent']}
+                    sectionTitle="Family & Guardian Profile"
                   >
                     <ParentPortal />
                   </ProtectedRoute>
@@ -141,7 +195,7 @@ export default function App() {
                     ]}
                     sectionTitle="Admissions Management Portal"
                   >
-                    <AdminPortal />
+                    <AdmissionsPortal />
                   </ProtectedRoute>
                 }
               />

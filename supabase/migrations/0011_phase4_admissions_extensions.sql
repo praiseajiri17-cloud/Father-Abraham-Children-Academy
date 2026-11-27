@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS public.admission_medical_details (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now())
 );
 
+DROP TRIGGER IF EXISTS trg_admission_medical_details_updated_at ON public.admission_medical_details;
 CREATE TRIGGER trg_admission_medical_details_updated_at
   BEFORE UPDATE ON public.admission_medical_details
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
@@ -268,6 +269,7 @@ CREATE POLICY admission_apps_update_applicant_or_officer ON public.admission_app
   );
 
 -- Policies for admission_medical_details
+DROP POLICY IF EXISTS admission_medical_select_authorized ON public.admission_medical_details;
 CREATE POLICY admission_medical_select_authorized ON public.admission_medical_details
   FOR SELECT TO authenticated
   USING (
@@ -281,6 +283,7 @@ CREATE POLICY admission_medical_select_authorized ON public.admission_medical_de
     OR public.has_permission('admissions.review')
   );
 
+DROP POLICY IF EXISTS admission_medical_insert_applicant_or_officer ON public.admission_medical_details;
 CREATE POLICY admission_medical_insert_applicant_or_officer ON public.admission_medical_details
   FOR INSERT TO authenticated
   WITH CHECK (
@@ -296,6 +299,7 @@ CREATE POLICY admission_medical_insert_applicant_or_officer ON public.admission_
     )
   );
 
+DROP POLICY IF EXISTS admission_medical_update_applicant_or_officer ON public.admission_medical_details;
 CREATE POLICY admission_medical_update_applicant_or_officer ON public.admission_medical_details
   FOR UPDATE TO authenticated
   USING (
@@ -324,6 +328,7 @@ CREATE POLICY admission_medical_update_applicant_or_officer ON public.admission_
   );
 
 -- Policies for admission_status_history
+DROP POLICY IF EXISTS admission_history_select_authorized ON public.admission_status_history;
 CREATE POLICY admission_history_select_authorized ON public.admission_status_history
   FOR SELECT TO authenticated
   USING (
@@ -340,6 +345,7 @@ CREATE POLICY admission_history_select_authorized ON public.admission_status_his
     OR public.is_general_admin()
   );
 
+DROP POLICY IF EXISTS admission_history_insert_staff ON public.admission_status_history;
 CREATE POLICY admission_history_insert_staff ON public.admission_status_history
   FOR INSERT TO authenticated
   WITH CHECK (
@@ -365,6 +371,7 @@ CREATE TRIGGER trg_prevent_admission_history_mutation
   FOR EACH ROW EXECUTE FUNCTION public.prevent_admission_history_mutation();
 
 -- Policies for admission_notifications
+DROP POLICY IF EXISTS admission_notifications_select_self_or_staff ON public.admission_notifications;
 CREATE POLICY admission_notifications_select_self_or_staff ON public.admission_notifications
   FOR SELECT TO authenticated
   USING (
@@ -374,11 +381,13 @@ CREATE POLICY admission_notifications_select_self_or_staff ON public.admission_n
     OR public.is_general_admin()
   );
 
+DROP POLICY IF EXISTS admission_notifications_update_read_self ON public.admission_notifications;
 CREATE POLICY admission_notifications_update_read_self ON public.admission_notifications
   FOR UPDATE TO authenticated
   USING (recipient_profile_id = public.current_profile_id())
   WITH CHECK (recipient_profile_id = public.current_profile_id());
 
+DROP POLICY IF EXISTS admission_notifications_insert_staff ON public.admission_notifications;
 CREATE POLICY admission_notifications_insert_staff ON public.admission_notifications
   FOR INSERT TO authenticated
   WITH CHECK (
@@ -697,3 +706,74 @@ ON CONFLICT (setting_key) DO NOTHING;
 INSERT INTO public.academic_sessions (name, start_date, end_date, is_current)
 SELECT '2026/2027', DATE '2026-09-07', DATE '2027-07-23', TRUE
 WHERE NOT EXISTS (SELECT 1 FROM public.academic_sessions);
+
+-- 10. Least-Privilege PostgREST Schema, Table, Sequence & Function Grants
+-- Ensures Supabase PostgREST anon/authenticated roles can evaluate RLS policies
+-- without hitting 42501 table-level permission errors, while keeping immutable
+-- audit/payment tables strictly read-only to client roles.
+GRANT USAGE ON SCHEMA public TO anon, authenticated;
+
+GRANT SELECT ON
+  public.school_sections,
+  public.class_levels,
+  public.school_settings,
+  public.announcements
+TO anon;
+
+GRANT INSERT ON public.contact_enquiries TO anon;
+
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO authenticated;
+
+GRANT INSERT, UPDATE ON
+  public.profiles,
+  public.parents,
+  public.admission_applications,
+  public.admission_documents,
+  public.admission_medical_details,
+  public.admission_notifications,
+  public.results,
+  public.attendance_records,
+  public.contact_enquiries
+TO authenticated;
+
+GRANT INSERT ON public.admission_status_history TO authenticated;
+
+GRANT INSERT, UPDATE, DELETE ON
+  public.staff,
+  public.staff_roles,
+  public.roles,
+  public.permissions,
+  public.role_permissions,
+  public.school_sections,
+  public.class_levels,
+  public.academic_sessions,
+  public.terms,
+  public.class_arms,
+  public.classes,
+  public.subjects,
+  public.class_subjects,
+  public.teacher_assignments,
+  public.grading_scales,
+  public.grading_scale_rules,
+  public.guardians,
+  public.parent_students,
+  public.students,
+  public.student_enrollments,
+  public.student_promotion_history,
+  public.student_medical_alerts,
+  public.assessments,
+  public.assessment_components,
+  public.result_publications,
+  public.report_cards,
+  public.fee_structures,
+  public.invoices,
+  public.invoice_items,
+  public.announcements,
+  public.school_settings
+TO authenticated;
+
+GRANT USAGE, SELECT ON SEQUENCE public.admission_reference_seq TO authenticated;
+
+GRANT EXECUTE ON FUNCTION public.ensure_parent_onboarding(TEXT, TEXT, TEXT, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.generate_admission_reference(TEXT) TO authenticated;
+

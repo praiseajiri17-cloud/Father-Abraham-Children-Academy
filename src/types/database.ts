@@ -123,6 +123,7 @@ export interface DbAdmissionApplication {
   previous_school_name: string | null;
   previous_class: string | null;
   previous_school_address: string | null;
+  reason_for_leaving: string | null;
   is_first_time_schooling: boolean;
   intended_section_id: string;
   intended_class_level_id: string;
@@ -192,3 +193,63 @@ export interface DbAuditLog {
   metadata?: Record<string, unknown>;
   created_at: string;
 }
+
+export interface DbParentRecord {
+  id: string;
+  profile_id: string;
+  occupation: string | null;
+  residential_address: string | null;
+  alternate_phone: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AdmissionDocumentType =
+  | 'birth_certificate'
+  | 'passport_photo'
+  | 'previous_report_card'
+  | 'transfer_certificate'
+  | 'medical_report'
+  | 'other';
+
+export interface DbAdmissionDocument {
+  id: string;
+  application_id: string;
+  document_type: AdmissionDocumentType;
+  storage_bucket: string;
+  storage_path: string;
+  file_name: string;
+  mime_type: string | null;
+  file_size_bytes: number | null;
+  verification_status: 'pending' | 'verified' | 'rejected';
+  verified_by_profile_id: string | null;
+  verified_at: string | null;
+  uploaded_by_profile_id: string;
+  created_at: string;
+}
+
+export interface DbApplicationPayment {
+  id: string;
+  application_id: string;
+  payer_profile_id: string;
+  payment_reference: string;
+  provider: string;
+  currency: 'NGN';
+  amount_kobo: number;
+  status: 'initialized' | 'verified' | 'failed' | 'refunded';
+  verified_at: string | null;
+  verified_via_webhook: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbAnnouncement {
+  id: string;
+  title: string;
+  body: string;
+  audience: 'public' | 'parents' | 'staff' | 'all';
+  is_published: boolean;
+  published_at: string | null;
+  created_at: string;
+}
+

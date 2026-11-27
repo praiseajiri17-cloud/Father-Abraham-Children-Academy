@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
+import { SupabaseClient } from '@supabase/supabase-js';
 import {
   AlertTriangle,
+  Camera,
   CheckCircle2,
   ClipboardCheck,
   Download,
+  ExternalLink,
   FileText,
   HeartPulse,
   History,
@@ -18,6 +21,8 @@ import {
   PHYSICAL_DOCUMENT_CHECKLIST_ITEMS,
 } from '../../types/admissions';
 import {
+  AdmissionDocumentType,
+  DbAdmissionDocument,
   DbAuditLog,
   PhysicalDocumentsStatus,
 } from '../../types/database';
@@ -26,8 +31,13 @@ import {
   PaymentStatusBadge,
   PhysicalDocsBadge,
 } from './AdmissionStatusBadge';
+import {
+  createAdmissionDocumentSignedUrl,
+  fetchApplicationDocuments,
+} from '../../services/admissionsService';
 
 interface StaffApplicationDetailPanelProps {
+  supabase: SupabaseClient | null;
   application: AdmissionApplicationExpanded;
   history: AdmissionStatusHistoryItem[];
   auditLogs: DbAuditLog[];
@@ -55,11 +65,21 @@ interface StaffApplicationDetailPanelProps {
     overrideReason: string;
     reviewerNotes?: string;
   }) => Promise<void>;
-  onDownloadOfficialPdf: (app: AdmissionApplicationExpanded) => void;
-  onPrintOfficialForm: (app: AdmissionApplicationExpanded) => void;
+  onDownloadOfficialPdf: (app: AdmissionApplicationExpanded, passportUrl?: string | null) => void;
+  onPrintOfficialForm: (app: AdmissionApplicationExpanded, passportUrl?: string | null) => void;
 }
 
+const DOC_LABELS: Record<AdmissionDocumentType, string> = {
+  passport_photo: 'Passport Photograph',
+  birth_certificate: 'Birth Certificate / Age Declaration',
+  previous_report_card: 'Previous School Report Card',
+  transfer_certificate: 'Transfer Certificate',
+  medical_report: 'Immunization / Medical Record',
+  other: 'Supporting Document',
+};
+
 export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelProps> = ({
+  supabase,
   application,
   history,
   auditLogs,
@@ -97,6 +117,10 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
   const [overrideReason, setOverrideReason] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const [documents, setDocuments] = useState<DbAdmissionDocument[]>([]);
+  const [passportUrl, setPassportUrl] = useState<string | null>(null);
+  const [docUrls, setDocUrls] = useState<Record<string, string>>({});
+
   useEffect(() => {
     setDocStatus(application.physical_documents_status);
     setReceivedByName(application.physical_documents_received_by_name || defaultStaffName);
@@ -112,6 +136,38 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
     setOverrideReason('');
     setActionError(null);
   }, [application, defaultStaffName]);
+
+  useEffect(() => {
+    const loadDocs = async () => {
+      if (!supabase) return;
+      try {
+        const docs = await fetchApplicationDocuments(supabase, application.id);
+        setDocuments(docs);
+
+        const passportDoc = docs.find((d) => d.document_type === 'passport_photo');
+        const passportPath = passportDoc?.storage_path || application.passport_photo_path;
+        if (passportPath) {
+          const url = await createAdmissionDocumentSignedUrl(supabase, passportPath, 600);
+          setPassportUrl(url);
+        } else {
+          setPassportUrl(null);
+        }
+
+        const urls: Record<string, string> = {};
+        await Promise.all(
+          docs.map(async (doc) => {
+            const url = await createAdmissionDocumentSignedUrl(supabase, doc.storage_path, 600);
+            if (url) urls[doc.id] = url;
+          })
+        );
+        setDocUrls(urls);
+      } catch {
+        setDocuments([]);
+        setPassportUrl(null);
+      }
+    };
+    void loadDocs();
+  }, [supabase, application.id, application.passport_photo_path]);
 
   const isFinalized =
     application.application_status === 'approved' ||
@@ -155,6 +211,12 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
       setActionError('Please enter specific correction instructions for the parent.');
       return;
     }
+    if (targetStatus === 'rejected' && !correctionNotes.trim() && !reviewerNotes.trim()) {
+      setActionError(
+        'Please record a rejection reason in the Parent-Visible Note or Internal Remarks before rejecting.'
+      );
+      return;
+    }
     try {
       await onUpdateReviewDecision({
         applicationId: application.id,
@@ -191,31 +253,45 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
     <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
       {/* Header */}
       <div className="bg-[#091C30] text-white p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2 mb-1.5">
-            <span className="font-mono text-xs font-bold bg-[#D9B76A] text-[#091C30] px-2.5 py-0.5 rounded">
-              {application.application_reference}
-            </span>
-            <ApplicationStatusBadge status={application.application_status} />
-            <PaymentStatusBadge status={application.payment_status} />
-            <PhysicalDocsBadge status={application.physical_documents_status} />
+        <div className="flex items-start gap-4 min-w-0">
+          {passportUrl ? (
+            <img
+              src={passportUrl}
+              alt={`${application.child_first_name} passport`}
+              className="w-14 h-18 rounded-xl object-cover border-2 border-[#D9B76A] shrink-0 bg-white"
+            />
+          ) : (
+            <div className="w-14 h-18 rounded-xl bg-white/10 border border-[#D9B76A]/30 flex items-center justify-center shrink-0">
+              <Camera className="w-5 h-5 text-[#D9B76A]" />
+            </div>
+          )}
+
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2 mb-1.5">
+              <span className="font-mono text-xs font-bold bg-[#D9B76A] text-[#091C30] px-2.5 py-0.5 rounded tabular-nums">
+                {application.application_reference}
+              </span>
+              <ApplicationStatusBadge status={application.application_status} />
+              <PaymentStatusBadge status={application.payment_status} />
+              <PhysicalDocsBadge status={application.physical_documents_status} />
+            </div>
+            <h3 className="text-xl font-extrabold font-['Manrope'] truncate">
+              {application.child_first_name} {application.child_middle_name || ''}{' '}
+              {application.child_last_name}
+            </h3>
+            <p className="text-xs text-slate-300 mt-0.5">
+              {application.school_sections?.name} • {application.class_levels?.name} •{' '}
+              {application.academic_sessions?.name}
+            </p>
           </div>
-          <h3 className="text-xl font-extrabold font-['Manrope']">
-            {application.child_first_name} {application.child_middle_name || ''}{' '}
-            {application.child_last_name}
-          </h3>
-          <p className="text-xs text-slate-300 mt-0.5">
-            {application.school_sections?.name} • {application.class_levels?.name} •{' '}
-            {application.academic_sessions?.name}
-          </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           <button
             type="button"
             disabled={!isPaid}
-            onClick={() => onDownloadOfficialPdf(application)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={() => onDownloadOfficialPdf(application, passportUrl)}
+            className="inline-flex items-center gap-1.5 px-3.5 min-h-[44px] rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed"
             title={isPaid ? 'Download Official Paid A4 Form' : 'Locked until payment is verified'}
           >
             <Download className="w-3.5 h-3.5 text-[#D9B76A]" />
@@ -224,8 +300,8 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
           <button
             type="button"
             disabled={!isPaid}
-            onClick={() => onPrintOfficialForm(application)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={() => onPrintOfficialForm(application, passportUrl)}
+            className="inline-flex items-center gap-1.5 px-3.5 min-h-[44px] rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Printer className="w-3.5 h-3.5 text-[#D9B76A]" />
             <span>Print A4</span>
@@ -251,7 +327,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <span className="text-slate-500 block">DOB / Gender</span>
-                <strong>
+                <strong className="tabular-nums">
                   {application.child_date_of_birth} ({application.child_gender})
                 </strong>
               </div>
@@ -290,7 +366,11 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
                     ? 'First-time entrant'
                     : `${application.previous_school_name || application.previous_school || '—'} (${
                         application.previous_class || 'N/A'
-                      })`}
+                      })${
+                        application.reason_for_leaving
+                          ? ` — Reason: ${application.reason_for_leaving}`
+                          : ''
+                      }`}
                 </span>
               </div>
             </div>
@@ -336,6 +416,41 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
           </div>
         </div>
 
+        {/* Uploaded Digital Files */}
+        {documents.length > 0 && (
+          <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
+            <h4 className="text-sm font-extrabold text-[#102B46] font-['Manrope']">
+              Uploaded Applicant Files ({documents.length})
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {documents.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="flex items-center justify-between gap-2 bg-[#F5F3ED] border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs"
+                >
+                  <div className="min-w-0">
+                    <div className="font-bold text-[#102B46] truncate">
+                      {DOC_LABELS[doc.document_type] || doc.document_type}
+                    </div>
+                    <div className="text-[11px] text-slate-500 truncate">{doc.file_name}</div>
+                  </div>
+                  {docUrls[doc.id] && (
+                    <a
+                      href={docUrls[doc.id]}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-[#102B46] font-bold hover:bg-slate-50 shrink-0"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open</span>
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Physical Document Receipt Tracking Form */}
         <form
           onSubmit={(e) => void handleSavePhysicalDocs(e)}
@@ -357,7 +472,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
               <select
                 value={docStatus}
                 onChange={(e) => setDocStatus(e.target.value as PhysicalDocumentsStatus)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm bg-white"
+                className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm bg-white"
               >
                 <option value="not_submitted">Not Submitted</option>
                 <option value="received">Received at School</option>
@@ -375,7 +490,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
                 value={receivedByName}
                 onChange={(e) => setReceivedByName(e.target.value)}
                 placeholder="Name of staff receiving form"
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm"
+                className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm"
               />
             </div>
             <div>
@@ -386,7 +501,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
                 type="date"
                 value={receivedAt}
                 onChange={(e) => setReceivedAt(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm"
+                className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm"
               />
             </div>
           </div>
@@ -429,7 +544,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
           <button
             type="submit"
             disabled={isBusy}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#102B46] hover:bg-[#091C30] text-white font-bold text-xs sm:text-sm disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-5 min-h-[44px] rounded-xl bg-[#102B46] hover:bg-[#091C30] text-white font-bold text-xs sm:text-sm disabled:opacity-50"
           >
             {isBusy && <Loader2 className="w-4 h-4 animate-spin" />}
             <span>Save Physical Document Record</span>
@@ -438,7 +553,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
 
         {/* Admission Officer Review & Decision Controls */}
         <div className="rounded-2xl border border-slate-200 p-5 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h4 className="text-sm font-extrabold text-[#102B46] font-['Manrope']">
               Admission Review & Decision
             </h4>
@@ -464,13 +579,13 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
             </div>
             <div>
               <label className="block text-xs font-bold text-[#102B46] mb-1">
-                Parent-Visible Correction / Decision Note
+                Parent-Visible Correction / Decision Reason
               </label>
               <textarea
                 rows={2}
                 value={correctionNotes}
                 onChange={(e) => setCorrectionNotes(e.target.value)}
-                placeholder="Required if requesting corrections from the parent..."
+                placeholder="Required if requesting corrections or explaining rejection..."
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs sm:text-sm"
               />
             </div>
@@ -481,7 +596,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
               type="button"
               disabled={isBusy || (isFinalized && !canOverride)}
               onClick={() => void handleDecision('under_review')}
-              className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs disabled:opacity-40"
+              className="px-4 min-h-[44px] rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs disabled:opacity-40"
             >
               Mark Under Review
             </button>
@@ -489,7 +604,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
               type="button"
               disabled={isBusy || (isFinalized && !canOverride)}
               onClick={() => void handleDecision('correction_requested')}
-              className="px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs disabled:opacity-40"
+              className="px-4 min-h-[44px] rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs disabled:opacity-40"
             >
               Request Corrections
             </button>
@@ -497,7 +612,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
               type="button"
               disabled={isBusy || (isFinalized && !canOverride)}
               onClick={() => void handleDecision('approved')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#15803D] hover:bg-emerald-800 text-white font-bold text-xs disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 px-4 min-h-[44px] rounded-xl bg-[#15803D] hover:bg-emerald-800 text-white font-bold text-xs disabled:opacity-40"
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
               <span>Approve Application</span>
@@ -506,7 +621,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
               type="button"
               disabled={isBusy || (isFinalized && !canOverride)}
               onClick={() => void handleDecision('rejected')}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 px-4 min-h-[44px] rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs disabled:opacity-40"
             >
               <XCircle className="w-3.5 h-3.5" />
               <span>Reject Application</span>
@@ -541,7 +656,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
                       | 'rejected'
                   )
                 }
-                className="rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+                className="min-h-[44px] rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
               >
                 <option value="under_review">Reopen to Under Review</option>
                 <option value="submitted">Reopen to Submitted</option>
@@ -554,13 +669,13 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
                 value={overrideReason}
                 onChange={(e) => setOverrideReason(e.target.value)}
                 placeholder="Mandatory audit reason for override/reopen"
-                className="sm:col-span-2 rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+                className="sm:col-span-2 min-h-[44px] rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
               />
             </div>
             <button
               type="submit"
               disabled={isBusy}
-              className="px-4 py-2 rounded-xl bg-[#102B46] hover:bg-[#091C30] text-white font-bold text-xs"
+              className="px-4 min-h-[44px] rounded-xl bg-[#102B46] hover:bg-[#091C30] text-white font-bold text-xs"
             >
               Execute Audited Override / Reopen
             </button>
@@ -588,7 +703,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
                         {h.event_type.replace(/_/g, ' ')}
                         {h.is_internal ? ' (Internal)' : ''}
                       </span>
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[10px] text-slate-500 tabular-nums">
                         {new Date(h.created_at).toLocaleString('en-NG')}
                       </span>
                     </div>
@@ -617,7 +732,7 @@ export const StaffApplicationDetailPanel: React.FC<StaffApplicationDetailPanelPr
                   >
                     <div className="flex items-center justify-between gap-2">
                       <code className="font-mono font-bold text-[#102B46]">{log.action}</code>
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[10px] text-slate-500 tabular-nums">
                         {new Date(log.created_at).toLocaleString('en-NG')}
                       </span>
                     </div>

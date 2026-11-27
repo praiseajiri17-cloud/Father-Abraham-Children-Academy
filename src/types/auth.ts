@@ -60,6 +60,7 @@ export interface AuthorizationState {
   permissions: string[];
   verificationSource: 'unconnected_phase_2' | 'supabase_unconfigured' | 'supabase_verified';
   verificationError: string | null;
+  diagnosticError: string | null;
 }
 
 export interface AppAuthContextValue extends AuthenticationState {

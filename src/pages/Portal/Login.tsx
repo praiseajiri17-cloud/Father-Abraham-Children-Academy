@@ -1,7 +1,7 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { SignIn } from '@clerk/react';
-import { ShieldCheck, Users, Lock, UserPlus, Info } from 'lucide-react';
+import { ShieldCheck, Users, UserPlus, ArrowLeft } from 'lucide-react';
 import { PageHeader } from '../../components/common/PageHeader';
 import { ClerkSetupNotice } from '../../components/auth/ClerkSetupNotice';
 import { academyClerkAppearance, useAppAuth } from '../../context/AuthContext';
@@ -9,12 +9,18 @@ import { SCHOOL_INFO } from '../../constants/data';
 
 export const Login: React.FC = () => {
   const { isConfigured, authError } = useAppAuth();
+  const location = useLocation();
+  const rawFrom = (location.state as { from?: string } | null)?.from;
+  const redirectAfterSignIn =
+    typeof rawFrom === 'string' && rawFrom.startsWith('/') && !rawFrom.startsWith('//')
+      ? rawFrom
+      : '/portal';
 
   return (
     <div className="flex flex-col min-h-screen">
       <PageHeader
         title="School Portal Sign In"
-        subtitle={`Secure portal authentication for ${SCHOOL_INFO.name}.`}
+        subtitle={`Sign in to ${SCHOOL_INFO.name} School Portal.`}
         breadcrumbs={[{ name: 'Portal', path: '/portal' }, { name: 'Sign In' }]}
       />
 
@@ -31,13 +37,13 @@ export const Login: React.FC = () => {
                     routing="path"
                     path="/portal/login"
                     signUpUrl="/portal/register"
-                    fallbackRedirectUrl="/portal"
+                    fallbackRedirectUrl={redirectAfterSignIn}
                     appearance={academyClerkAppearance}
                   />
                 </div>
               </div>
 
-              {/* Right: Account Rules & Guidance */}
+              {/* Right: Family Registration & Staff Notice */}
               <div className="lg:col-span-5 flex flex-col gap-6">
                 <div className="bg-white rounded-3xl shadow-lg border border-slate-200 p-6 sm:p-8 flex flex-col gap-5">
                   <div className="flex items-center gap-3">
@@ -49,13 +55,13 @@ export const Login: React.FC = () => {
                         Families
                       </span>
                       <h2 className="text-xl font-extrabold text-[#102B46] font-['Manrope']">
-                        Parents & Guardians
+                        Parents &amp; Guardians
                       </h2>
                     </div>
                   </div>
                   <p className="text-sm text-slate-600 leading-relaxed">
-                    New parents and guardians can register an account to prepare for ward linking,
-                    fee tracking, and academic updates in upcoming portal releases.
+                    New parents and guardians can create a family account to submit online
+                    admission applications and monitor updates for their children.
                   </p>
                   <NavLink
                     to="/portal/register"
@@ -76,27 +82,21 @@ export const Login: React.FC = () => {
                         Authorized Personnel
                       </span>
                       <h3 className="text-lg font-extrabold text-white font-['Manrope']">
-                        Staff & Administration
+                        Staff &amp; Administration
                       </h3>
                     </div>
                   </div>
                   <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                    Teachers, Admission Officers, Principals, Finance Officers, Secretaries, and
-                    General Administrators sign in using provisioned credentials. Self-registration
-                    for privileged staff roles is strictly disabled.
+                    Teachers, Admission Officers, Finance Officers, Principals, and General
+                    Administrators sign in with their authorized school accounts.
                   </p>
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-slate-300">
-                    <Info className="w-4 h-4 text-[#D9B76A] shrink-0 mt-0.5" />
-                    <span>
-                      Role permissions are verified server-side via Supabase in Phase 3 and cannot
-                      be selected from the browser.
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 text-xs text-slate-500 px-2">
-                  <Lock className="w-4 h-4 text-[#102B46] shrink-0" />
-                  <span>Protected by Clerk Authentication</span>
+                  <NavLink
+                    to="/"
+                    className="inline-flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-4 py-2.5 rounded-xl font-bold text-xs transition-colors"
+                  >
+                    <ArrowLeft className="w-4 h-4 text-[#D9B76A]" />
+                    <span>Return to Public Website</span>
+                  </NavLink>
                 </div>
               </div>
             </div>

@@ -115,7 +115,7 @@ export const Home: React.FC = () => {
 
               <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto pt-4">
                 <NavLink
-                  to="/portal"
+                  to="/apply"
                   className="w-full sm:w-auto flex items-center justify-center gap-3 bg-[#D9B76A] hover:bg-[#c9a658] text-[#102B46] px-8 py-4 rounded-xl font-extrabold text-base shadow-lg transition-all hover:scale-105"
                 >
                   <span>Apply for Admission</span>
@@ -152,28 +152,28 @@ export const Home: React.FC = () => {
             <div className="lg:col-span-4 hidden lg:block">
               <div className="relative bg-gradient-to-br from-[#102B46] to-[#091C30] p-6 rounded-3xl border-2 border-[#D9B76A]/40 shadow-2xl">
                 <div className="absolute -top-4 -right-4 bg-[#D9B76A] text-[#102B46] font-bold text-xs px-3 py-1 rounded-full uppercase tracking-wider shadow">
-                  2026/2027 Session
+                  Online Admissions
                 </div>
                 <h3 className="text-xl font-bold text-white mb-3 font-['Manrope']">Quick Admission Inquiry</h3>
                 <p className="text-sm text-slate-300 mb-6">
-                  Ready to give your child the best educational start? Talk with our admissions desk today.
+                  Ready to give your child the best educational start? Begin your family admission application online.
                 </p>
                 <div className="flex flex-col gap-3">
                   <div className="bg-white/5 p-3 rounded-xl border border-white/10 flex items-center gap-3">
                     <CheckCircle2 className="w-5 h-5 text-[#D9B76A] shrink-0" />
-                    <span className="text-xs text-slate-200">Creche & Montessori Playgroup</span>
+                    <span className="text-xs text-slate-200">Creche &amp; Montessori Playgroup</span>
                   </div>
                   <div className="bg-white/5 p-3 rounded-xl border border-white/10 flex items-center gap-3">
                     <CheckCircle2 className="w-5 h-5 text-[#D9B76A] shrink-0" />
-                    <span className="text-xs text-slate-200">Primary Foundation & Literacy</span>
+                    <span className="text-xs text-slate-200">Primary Foundation &amp; Literacy</span>
                   </div>
                   <div className="bg-white/5 p-3 rounded-xl border border-white/10 flex items-center gap-3">
                     <CheckCircle2 className="w-5 h-5 text-[#D9B76A] shrink-0" />
-                    <span className="text-xs text-slate-200">Secondary STEM & Arts Excellence</span>
+                    <span className="text-xs text-slate-200">Secondary STEM &amp; Arts Excellence</span>
                   </div>
                 </div>
                 <NavLink
-                  to="/portal"
+                  to="/apply"
                   className="mt-6 w-full flex items-center justify-center gap-2 bg-[#D9B76A] hover:bg-[#c9a658] text-[#102B46] py-3 rounded-xl font-bold text-sm transition-colors"
                 >
                   <span>Start Application</span>
@@ -203,8 +203,8 @@ export const Home: React.FC = () => {
                 />
               </div>
               <div className="absolute -bottom-6 -right-6 z-20 bg-[#102B46] text-white p-6 rounded-2xl border-2 border-[#D9B76A] shadow-xl hidden sm:block max-w-xs">
-                <div className="text-3xl font-extrabold text-[#D9B76A] font-['Manrope'] mb-1">15+ Years</div>
-                <p className="text-xs text-slate-300">Of unwavering commitment to academic excellence and moral leadership.</p>
+                <div className="text-3xl font-extrabold text-[#D9B76A] font-['Manrope'] mb-1">3 Sections</div>
+                <p className="text-xs text-slate-300">Creche, Primary, and Secondary united by academic excellence and moral leadership.</p>
               </div>
               <div className="absolute -top-6 -left-6 z-0 w-48 h-48 bg-[#D9B76A]/20 rounded-full blur-2xl"></div>
             </div>
@@ -471,7 +471,7 @@ export const Home: React.FC = () => {
         <div className="absolute inset-0 opacity-10 bg-[radial-gradient(#D9B76A_1px,transparent_1px)] [background-size:16px_16px]"></div>
         <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center flex flex-col items-center gap-6">
           <span className="px-4 py-1.5 rounded-full bg-[#D9B76A] text-[#102B46] text-xs font-extrabold uppercase tracking-widest shadow">
-            Admissions 2026/2027 Session
+            Online Admissions Portal
           </span>
           <h2 className="text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight uppercase font-['Manrope']">
             Give Your Child a Stronger Foundation for the Future
@@ -481,7 +481,7 @@ export const Home: React.FC = () => {
           </p>
           <div className="flex flex-col sm:flex-row items-center gap-4 pt-4">
             <NavLink
-              to="/portal"
+              to="/apply"
               className="w-full sm:w-auto bg-[#D9B76A] hover:bg-[#c9a658] text-[#102B46] px-8 py-4 rounded-xl font-extrabold text-base shadow-xl transition-all hover:scale-105"
             >
               Apply for Admission

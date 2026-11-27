@@ -17,18 +17,18 @@ export const TeacherPortal: React.FC = () => {
             <GraduationCap className="w-8 h-8" />
           </div>
           <h2 className="text-2xl font-extrabold text-[#102B46] font-['Manrope']">
-            Teacher Dashboard Under Development
+            Teacher &amp; Caregiver Workspace
           </h2>
           <p className="text-sm text-slate-600 leading-relaxed">
-            Classroom rosters, attendance registers, and grading workflows will be enabled once
-            authoritative staff verification is connected to Supabase.
+            Assigned class rosters, daily attendance registers, and continuous assessment score
+            entry will appear here once class allocations and active academic terms are published.
           </p>
           <NavLink
-            to="/portal"
+            to="/"
             className="inline-flex items-center gap-2 bg-[#102B46] text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-[#091C30]"
           >
             <ArrowLeft className="w-4 h-4 text-[#D9B76A]" />
-            <span>Back to Portal Hub</span>
+            <span>Back to School Website</span>
           </NavLink>
         </div>
       </section>

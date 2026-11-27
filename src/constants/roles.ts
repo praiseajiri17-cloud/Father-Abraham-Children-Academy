@@ -32,7 +32,7 @@ export const SYSTEM_ROLE_DEFINITIONS: Record<SystemRole, SystemRoleDefinition> =
     category: 'staff',
     description:
       'Review prospective student applications, schedule entrance assessments, and manage enrollment onboarding.',
-    portalPath: '/portal/admin',
+    portalPath: '/portal/admissions',
     selfRegistrationAllowed: false,
     provisioningMethod: 'Invited & verified by General Administrator',
   },
@@ -74,8 +74,20 @@ export const SYSTEM_ROLE_DEFINITIONS: Record<SystemRole, SystemRoleDefinition> =
       'Monitor ward progress, view attendance & fee receipts, and receive official academy announcements.',
     portalPath: '/portal/parent',
     selfRegistrationAllowed: true,
-    provisioningMethod: 'Self-registration enabled (linked to ward records in Phase 3)',
+    provisioningMethod: 'Family self-registration enabled',
   },
 };
 
 export const ALL_SYSTEM_ROLES: SystemRoleDefinition[] = Object.values(SYSTEM_ROLE_DEFINITIONS);
+
+export function getDefaultPortalRoute(roles: SystemRole[]): string {
+  if (roles.includes('general_admin')) return '/portal/admin';
+  if (roles.includes('principal') || roles.includes('finance_officer') || roles.includes('secretary')) {
+    return '/portal/admin';
+  }
+  if (roles.includes('admission_officer')) return '/portal/admissions';
+  if (roles.includes('teacher')) return '/portal/teacher';
+  if (roles.includes('parent')) return '/portal/parent';
+  return '/portal';
+}
+

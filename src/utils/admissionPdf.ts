@@ -6,6 +6,46 @@ import {
 } from '../types/admissions';
 import { formatNairaFromKobo } from '../services/admissionsService';
 
+async function loadImageAsJpegDataUrl(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.crossOrigin = 'anonymous';
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('Image load failed'));
+        el.src = objectUrl;
+      });
+      const canvas = document.createElement('canvas');
+      const targetW = 350;
+      const targetH = 420;
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, targetW, targetH);
+
+      const scale = Math.max(targetW / img.width, targetH / img.height);
+      const drawW = img.width * scale;
+      const drawH = img.height * scale;
+      const offsetX = (targetW - drawW) / 2;
+      const offsetY = (targetH - drawH) / 2;
+      ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
+
+      return canvas.toDataURL('image/jpeg', 0.9);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Generates and downloads an official A4 Admission Application Form PDF
  * for Father Abraham Children Academy.
@@ -13,12 +53,20 @@ import { formatNairaFromKobo } from '../services/admissionsService';
  * SECURITY / PAYMENT ENFORCEMENT:
  * Strictly refuses to generate an official paid form unless `application.payment_status === 'paid'`.
  */
-export function downloadOfficialAdmissionPdf(application: AdmissionApplicationExpanded): void {
+export async function downloadOfficialAdmissionPdf(
+  application: AdmissionApplicationExpanded,
+  contactInfo?: { address?: string | null; phone?: string | null; email?: string | null } | null,
+  options?: { passportImageUrl?: string | null }
+): Promise<void> {
   if (application.payment_status !== 'paid') {
     throw new Error(
       'Official Admission Form PDF cannot be downloaded until application fee payment is verified by the backend.'
     );
   }
+
+  const passportDataUrl = options?.passportImageUrl
+    ? await loadImageAsJpegDataUrl(options.passportImageUrl)
+    : null;
 
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -40,43 +88,72 @@ export function downloadOfficialAdmissionPdf(application: AdmissionApplicationEx
 
   let y = 14;
 
+  const drawSchoolCrestVector = (cx: number, topY: number) => {
+    // Shield outline matching Logo.tsx (#102B46 shield + #D9B76A gold border)
+    doc.setFillColor(...NAVY);
+    doc.setDrawColor(...GOLD);
+    doc.setLineWidth(0.7);
+    doc.roundedRect(cx - 9, topY, 18, 19, 2, 2, 'FD');
+
+    // Bottom gold diamond point
+    doc.setFillColor(...GOLD);
+    doc.triangle(cx - 2.6, topY + 19, cx + 2.6, topY + 19, cx, topY + 21.8, 'F');
+
+    // Flame emblem at top center
+    doc.setFillColor(...GOLD);
+    doc.circle(cx, topY + 4.3, 1.7, 'F');
+
+    // Open book lines
+    doc.setDrawColor(255, 255, 255);
+    doc.setLineWidth(0.6);
+    doc.rect(cx - 5, topY + 8, 10, 6.2);
+    doc.setDrawColor(...GOLD);
+    doc.line(cx, topY + 8, cx, topY + 14.2);
+
+    // Award dot
+    doc.setFillColor(...GOLD);
+    doc.circle(cx, topY + 16.5, 1.1, 'F');
+    doc.setLineWidth(0.2);
+  };
+
   const drawHeader = () => {
     doc.setFillColor(...NAVY);
     doc.rect(marginX, 12, contentWidth, 30, 'F');
     doc.setFillColor(...GOLD);
     doc.rect(marginX, 41, contentWidth, 1.5, 'F');
 
-    // Crest Placeholder Badge
-    doc.setFillColor(255, 255, 255);
-    doc.roundedRect(marginX + 4, 15.5, 22, 22, 2, 2, 'F');
-    doc.setTextColor(...NAVY);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.text('FACA', marginX + 15, 25, { align: 'center' });
-    doc.setFontSize(5.5);
-    doc.text('CREST', marginX + 15, 29.5, { align: 'center' });
-    doc.text('EST. ACADEMY', marginX + 15, 33.5, { align: 'center' });
+    drawSchoolCrestVector(marginX + 14, 15.2);
 
     // School Details
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(13.5);
-    doc.text(SCHOOL_INFO.name.toUpperCase(), marginX + 31, 20.5);
+    doc.text(SCHOOL_INFO.name.toUpperCase(), marginX + 29, 20.5);
 
     doc.setTextColor(...GOLD);
     doc.setFontSize(7.5);
-    doc.text(SCHOOL_INFO.levels, marginX + 31, 25);
+    doc.text(SCHOOL_INFO.levels, marginX + 29, 25);
 
     doc.setTextColor(226, 232, 240);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.2);
-    doc.text(SCHOOL_INFO.address, marginX + 31, 30.5);
+    if (contactInfo?.address) {
+      doc.text(contactInfo.address, marginX + 29, 30.5);
+    }
+    const contactLine = [
+      contactInfo?.phone ? `Tel: ${contactInfo.phone}` : '',
+      contactInfo?.email ? `Email: ${contactInfo.email}` : '',
+    ]
+      .filter(Boolean)
+      .join('  |  ');
+    if (contactLine) {
+      doc.text(contactLine, marginX + 29, 35);
+    }
     doc.text(
-      `Tel: ${SCHOOL_INFO.phone}  |  Email: ${SCHOOL_INFO.email}`,
-      marginX + 31,
-      35
+      `Portal: ${typeof window !== 'undefined' ? window.location.origin : 'Online Admissions Portal'}`,
+      marginX + 29,
+      39
     );
-    doc.text(`Portal: ${typeof window !== 'undefined' ? window.location.origin : 'Online Admissions Portal'}`, marginX + 31, 39);
 
     y = 48;
   };
@@ -93,12 +170,10 @@ export function downloadOfficialAdmissionPdf(application: AdmissionApplicationEx
     doc.setFillColor(...CREAM);
     doc.setDrawColor(...NAVY);
     doc.rect(marginX, y, contentWidth, 7, 'FD');
-    doc.setFillColor(...NAVY);
-    doc.rect(marginX, y, 3, 7, 'F');
     doc.setTextColor(...NAVY);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
-    doc.text(title.toUpperCase(), marginX + 6, y + 4.8);
+    doc.text(title.toUpperCase(), marginX + 4, y + 4.8);
     y += 10;
   };
 
@@ -166,18 +241,24 @@ export function downloadOfficialAdmissionPdf(application: AdmissionApplicationEx
   );
 
   // Passport Photo Box (Right side)
+  const photoX = pageWidth - marginX - 35;
+  const photoY = y - 1;
   doc.setDrawColor(...NAVY);
   doc.setFillColor(248, 250, 252);
-  doc.rect(pageWidth - marginX - 35, y - 1, 35, 41, 'FD');
-  doc.setTextColor(...MUTED);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
-  doc.text('AFFIX RECENT', pageWidth - marginX - 17.5, y + 16, { align: 'center' });
-  doc.text('PASSPORT', pageWidth - marginX - 17.5, y + 20, { align: 'center' });
-  doc.text('PHOTOGRAPH', pageWidth - marginX - 17.5, y + 24, { align: 'center' });
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6);
-  doc.text('(35mm x 45mm)', pageWidth - marginX - 17.5, y + 29, { align: 'center' });
+  doc.rect(photoX, photoY, 35, 41, 'FD');
+  if (passportDataUrl) {
+    doc.addImage(passportDataUrl, 'JPEG', photoX + 0.6, photoY + 0.6, 33.8, 39.8);
+  } else {
+    doc.setTextColor(...MUTED);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.text('AFFIX RECENT', pageWidth - marginX - 17.5, y + 16, { align: 'center' });
+    doc.text('PASSPORT', pageWidth - marginX - 17.5, y + 20, { align: 'center' });
+    doc.text('PHOTOGRAPH', pageWidth - marginX - 17.5, y + 24, { align: 'center' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6);
+    doc.text('(35mm x 45mm)', pageWidth - marginX - 17.5, y + 29, { align: 'center' });
+  }
 
   // Reference summary next to passport box
   y += 22;
@@ -257,7 +338,10 @@ export function downloadOfficialAdmissionPdf(application: AdmissionApplicationEx
       { label: 'Last Class Attended', value: application.previous_class || '—', widthFraction: 0.35 },
     ]);
     drawFieldRow([
-      { label: 'Previous School Address', value: application.previous_school_address || '—', widthFraction: 1 },
+      { label: 'Previous School Address', value: application.previous_school_address || '—', widthFraction: application.reason_for_leaving ? 0.55 : 1 },
+      ...(application.reason_for_leaving
+        ? [{ label: 'Reason for Leaving', value: application.reason_for_leaving, widthFraction: 0.45 }]
+        : []),
     ]);
   }
 
@@ -309,7 +393,7 @@ export function downloadOfficialAdmissionPdf(application: AdmissionApplicationEx
   doc.text('Date: ________________________', marginX + 125, y + 26.5);
   y += 35;
 
-  // Section F: Official School Use Only (starts on clean space / Page 2)
+  // Section F: Official School Use Only
   ensureSpace(78);
   drawSectionBanner('Section F — For Official School Use Only (Admissions Office)');
   doc.setDrawColor(...NAVY);

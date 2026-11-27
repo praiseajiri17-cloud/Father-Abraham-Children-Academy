@@ -9,9 +9,14 @@ import {
   AdmissionSettingsConfig,
   AdmissionStatusHistoryItem,
   AdmissionSummaryMetrics,
+  ApplicationPaymentWithChild,
+  ParentWorkspaceProfile,
 } from '../types/admissions';
 import {
+  AdmissionDocumentType,
   ApplicationStatus,
+  DbAdmissionDocument,
+  DbAnnouncement,
   DbAuditLog,
   PhysicalDocumentsStatus,
 } from '../types/database';
@@ -189,7 +194,7 @@ export async function saveOrSubmitParentApplication(
     resolvedParentId = parentRow?.id ?? null;
   }
 
-  const basePayload = {
+  const basePayload: Record<string, unknown> = {
     child_first_name: input.child_first_name.trim(),
     child_middle_name: input.child_middle_name.trim() || null,
     child_last_name: input.child_last_name.trim(),
@@ -201,6 +206,7 @@ export async function saveOrSubmitParentApplication(
     intended_section_id: input.intended_section_id,
     intended_class_level_id: input.intended_class_level_id,
     intended_session_id: input.intended_session_id,
+    ...(input.passport_photo_path ? { passport_photo_path: input.passport_photo_path } : {}),
     parent_full_name: input.parent_full_name.trim(),
     parent_relationship: input.parent_relationship.trim(),
     parent_email: input.parent_email.trim(),
@@ -224,6 +230,9 @@ export async function saveOrSubmitParentApplication(
     previous_school_address: input.is_first_time_schooling
       ? null
       : input.previous_school_address.trim() || null,
+    reason_for_leaving: input.is_first_time_schooling
+      ? null
+      : input.reason_for_leaving.trim() || null,
     additional_details: input.additional_details.trim() || null,
     declaration_accepted: mode === 'submit' ? input.declaration_accepted : Boolean(input.declaration_accepted),
     declaration_accepted_at:
@@ -239,13 +248,26 @@ export async function saveOrSubmitParentApplication(
   let resolvedApplicationId: string;
 
   if (input.id) {
-    const { data: updated, error: updateErr } = await supabase
+    let { data: updated, error: updateErr } = await supabase
       .from('admission_applications')
       .update(basePayload)
       .eq('id', input.id)
       .eq('applicant_profile_id', profileId)
       .select('id')
       .single();
+
+    if (updateErr && updateErr.message.includes('reason_for_leaving')) {
+      const { reason_for_leaving: _omit, ...fallbackPayload } = basePayload;
+      const retry = await supabase
+        .from('admission_applications')
+        .update(fallbackPayload)
+        .eq('id', input.id)
+        .eq('applicant_profile_id', profileId)
+        .select('id')
+        .single();
+      updated = retry.data;
+      updateErr = retry.error;
+    }
 
     if (updateErr || !updated) {
       throw new Error(updateErr?.message || 'Unable to update admission application.');
@@ -265,21 +287,34 @@ export async function saveOrSubmitParentApplication(
       appRef = `FACA-ADM-${year}-${rand}`;
     }
 
-    const { data: inserted, error: insertErr } = await supabase
+    const insertPayload = {
+      ...basePayload,
+      application_reference: appRef,
+      applicant_profile_id: profileId,
+      parent_id: resolvedParentId,
+      payment_status: 'unpaid',
+      application_fee_kobo:
+        typeof configuredFeeKobo === 'number' && configuredFeeKobo > 0 ? configuredFeeKobo : null,
+      physical_documents_submitted: false,
+      physical_documents_status: 'not_submitted',
+    };
+
+    let { data: inserted, error: insertErr } = await supabase
       .from('admission_applications')
-      .insert({
-        ...basePayload,
-        application_reference: appRef,
-        applicant_profile_id: profileId,
-        parent_id: resolvedParentId,
-        payment_status: 'unpaid',
-        application_fee_kobo:
-          typeof configuredFeeKobo === 'number' && configuredFeeKobo > 0 ? configuredFeeKobo : null,
-        physical_documents_submitted: false,
-        physical_documents_status: 'not_submitted',
-      })
+      .insert(insertPayload)
       .select('id')
       .single();
+
+    if (insertErr && insertErr.message.includes('reason_for_leaving')) {
+      const { reason_for_leaving: _omit, ...fallbackInsert } = insertPayload as Record<string, unknown>;
+      const retry = await supabase
+        .from('admission_applications')
+        .insert(fallbackInsert)
+        .select('id')
+        .single();
+      inserted = retry.data;
+      insertErr = retry.error;
+    }
 
     if (insertErr || !inserted) {
       throw new Error(insertErr?.message || 'Unable to create admission application.');
@@ -718,12 +753,15 @@ export async function fetchAdminStaffDirectory(
 }
 
 export async function assignOrRevokeStaffRole(
+  supabase: SupabaseClient,
   clerkToken: string | null,
+  callerProfileId: string | null,
   params: {
     action: 'assign_role' | 'revoke_role';
     targetEmail: string;
     roleCode: string;
     jobTitle?: string;
+    department?: string;
     notes?: string;
   }
 ): Promise<void> {
@@ -734,13 +772,100 @@ export async function assignOrRevokeStaffRole(
       targetEmail: params.targetEmail,
       roleCode: params.roleCode,
       jobTitle: params.jobTitle,
+      department: params.department,
       notes: params.notes,
     },
   });
 
-  if (!fnRes.ok) {
+  if (fnRes.ok) return;
+  if (fnRes.status !== 404 && fnRes.status !== 0) {
     throw new Error(fnRes.error);
   }
+
+  // Fallback directly via General Administrator RLS when Netlify Functions aren't mounted (e.g. Vite dev)
+  const cleanEmail = params.targetEmail.trim();
+  const { data: matchedProfile, error: profErr } = await supabase
+    .from('profiles')
+    .select('id')
+    .ilike('email', cleanEmail)
+    .maybeSingle();
+
+  if (profErr) throw new Error(profErr.message);
+  if (!matchedProfile) {
+    throw new Error(
+      'No portal profile matches that email yet. The staff member must sign into the School Portal at least once first.'
+    );
+  }
+
+  const { data: roleRow, error: roleErr } = await supabase
+    .from('roles')
+    .select('id, code, name')
+    .eq('code', params.roleCode)
+    .single();
+
+  if (roleErr || !roleRow) {
+    throw new Error('Selected institutional role was not found.');
+  }
+
+  let { data: staffRow, error: staffLookupErr } = await supabase
+    .from('staff')
+    .select('id')
+    .eq('profile_id', matchedProfile.id)
+    .maybeSingle();
+
+  if (staffLookupErr) throw new Error(staffLookupErr.message);
+
+  if (!staffRow) {
+    if (params.action === 'revoke_role') {
+      throw new Error('This user does not have an active staff record.');
+    }
+    const { data: createdStaff, error: createErr } = await supabase
+      .from('staff')
+      .insert({
+        profile_id: matchedProfile.id,
+        job_title: params.jobTitle?.trim() || roleRow.name,
+        department: params.department?.trim() || 'Administration',
+        employment_status: 'active',
+        created_by_profile_id: callerProfileId,
+      })
+      .select('id')
+      .single();
+    if (createErr || !createdStaff) {
+      throw new Error(createErr?.message || 'Unable to create staff record.');
+    }
+    staffRow = createdStaff;
+  }
+
+  if (params.action === 'revoke_role') {
+    if (params.roleCode === 'general_admin' && matchedProfile.id === callerProfileId) {
+      throw new Error('You cannot revoke your own General Administrator authority.');
+    }
+    const { error: revokeErr } = await supabase
+      .from('staff_roles')
+      .update({
+        is_active: false,
+        revoked_at: new Date().toISOString(),
+        notes: params.notes?.trim() || 'Revoked by General Administrator',
+      })
+      .eq('staff_id', staffRow.id)
+      .eq('role_id', roleRow.id);
+    if (revokeErr) throw new Error(revokeErr.message);
+    return;
+  }
+
+  const { error: assignErr } = await supabase.from('staff_roles').upsert(
+    {
+      staff_id: staffRow.id,
+      role_id: roleRow.id,
+      is_active: true,
+      assigned_by_profile_id: callerProfileId,
+      assigned_at: new Date().toISOString(),
+      revoked_at: null,
+      notes: params.notes?.trim() || 'Assigned by General Administrator',
+    },
+    { onConflict: 'staff_id,role_id' }
+  );
+  if (assignErr) throw new Error(assignErr.message);
 }
 
 export async function updateAdmissionSettingsConfig(
@@ -771,3 +896,424 @@ export async function updateAdmissionSettingsConfig(
 
   if (error) throw new Error(error.message);
 }
+
+export async function updatePublicContactInfoConfig(
+  supabase: SupabaseClient,
+  clerkToken: string | null,
+  profileId: string,
+  contactInfo: {
+    address: string;
+    phone: string;
+    email: string;
+    hours: string;
+    whatsapp_url?: string;
+  }
+): Promise<void> {
+  const normalized = {
+    configured: Boolean(
+      contactInfo.address.trim() ||
+        contactInfo.phone.trim() ||
+        contactInfo.email.trim() ||
+        contactInfo.hours.trim()
+    ),
+    address: contactInfo.address.trim() || null,
+    phone: contactInfo.phone.trim() || null,
+    email: contactInfo.email.trim() || null,
+    hours: contactInfo.hours.trim() || null,
+    whatsapp_url: contactInfo.whatsapp_url?.trim() || null,
+  };
+
+  const fnRes = await callVerifiedNetlifyEndpoint('/.netlify/functions/admin-staff-roles', clerkToken, {
+    method: 'POST',
+    body: {
+      action: 'update_public_contact_info',
+      publicContactInfo: normalized,
+    },
+  });
+
+  if (fnRes.ok) return;
+  if (fnRes.status !== 404 && fnRes.status !== 0) {
+    throw new Error(fnRes.error);
+  }
+
+  const { error } = await supabase.from('school_settings').upsert({
+    setting_key: 'public_contact_info',
+    setting_value: normalized,
+    is_public: true,
+    updated_by_profile_id: profileId,
+  });
+
+  if (error) throw new Error(error.message);
+}
+
+export async function updatePublicAnnouncementConfig(
+  supabase: SupabaseClient,
+  clerkToken: string | null,
+  profileId: string,
+  announcement: {
+    is_active: boolean;
+    badge: string;
+    message: string;
+    cta_label: string;
+    cta_path: string;
+  }
+): Promise<void> {
+  const cleanMessage = announcement.message.trim();
+  const safePath =
+    announcement.cta_path.trim().startsWith('/') && !announcement.cta_path.trim().startsWith('//')
+      ? announcement.cta_path.trim()
+      : '/apply';
+
+  const normalized = {
+    is_active: Boolean(announcement.is_active && cleanMessage),
+    badge: announcement.badge.trim() || 'Notice',
+    message: cleanMessage,
+    cta_label: announcement.cta_label.trim() || 'Apply Now',
+    cta_path: safePath,
+  };
+
+  const fnRes = await callVerifiedNetlifyEndpoint('/.netlify/functions/admin-staff-roles', clerkToken, {
+    method: 'POST',
+    body: {
+      action: 'update_public_announcement',
+      publicAnnouncement: normalized,
+    },
+  });
+
+  if (fnRes.ok) return;
+  if (fnRes.status !== 404 && fnRes.status !== 0) {
+    throw new Error(fnRes.error);
+  }
+
+  const { error } = await supabase.from('school_settings').upsert({
+    setting_key: 'public_announcement',
+    setting_value: normalized,
+    is_public: true,
+    updated_by_profile_id: profileId,
+  });
+
+  if (error) throw new Error(error.message);
+}
+
+// ----------------------------------------------------------------------------
+// Phase 4: Private Admission Documents, Parent Family Profile, Payments & Notices
+// ----------------------------------------------------------------------------
+
+const ALLOWED_PASSPORT_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const ALLOWED_DOCUMENT_MIME = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+]);
+
+export async function fetchApplicationDocuments(
+  supabase: SupabaseClient,
+  applicationId: string
+): Promise<DbAdmissionDocument[]> {
+  const { data, error } = await supabase
+    .from('admission_documents')
+    .select('*')
+    .eq('application_id', applicationId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as DbAdmissionDocument[];
+}
+
+export async function createAdmissionDocumentSignedUrl(
+  supabase: SupabaseClient,
+  storagePath: string,
+  expiresInSeconds = 300
+): Promise<string | null> {
+  if (!storagePath) return null;
+  const { data, error } = await supabase.storage
+    .from('admission-documents')
+    .createSignedUrl(storagePath, expiresInSeconds);
+
+  if (error || !data?.signedUrl) return null;
+  return data.signedUrl;
+}
+
+export async function uploadAdmissionDocument(
+  supabase: SupabaseClient,
+  params: {
+    applicationId: string;
+    profileId: string;
+    documentType: AdmissionDocumentType;
+    file: File;
+  }
+): Promise<DbAdmissionDocument> {
+  const { applicationId, profileId, documentType, file } = params;
+
+  const isPassport = documentType === 'passport_photo';
+  const maxBytes = isPassport ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
+  const allowedMimes = isPassport ? ALLOWED_PASSPORT_MIME : ALLOWED_DOCUMENT_MIME;
+
+  if (!allowedMimes.has(file.type)) {
+    throw new Error(
+      isPassport
+        ? 'Passport photograph must be a JPG, PNG, or WebP image.'
+        : 'Documents must be PDF, JPG, PNG, or WebP files.'
+    );
+  }
+
+  if (file.size <= 0 || file.size > maxBytes) {
+    throw new Error(
+      isPassport
+        ? 'Passport photograph must be under 5 MB.'
+        : 'Supporting document must be under 10 MB.'
+    );
+  }
+
+  const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 90);
+  const uniquePrefix = crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : String(Date.now());
+  const storagePath = `${applicationId}/${documentType}_${uniquePrefix}_${sanitizedName}`;
+
+  const { error: uploadErr } = await supabase.storage
+    .from('admission-documents')
+    .upload(storagePath, file, {
+      cacheControl: '3600',
+      contentType: file.type,
+      upsert: false,
+    });
+
+  if (uploadErr) {
+    throw new Error(uploadErr.message || 'Unable to upload file to private storage.');
+  }
+
+  const { data: docRow, error: insertErr } = await supabase
+    .from('admission_documents')
+    .insert({
+      application_id: applicationId,
+      document_type: documentType,
+      storage_bucket: 'admission-documents',
+      storage_path: storagePath,
+      file_name: file.name,
+      mime_type: file.type,
+      file_size_bytes: file.size,
+      uploaded_by_profile_id: profileId,
+    })
+    .select('*')
+    .single();
+
+  if (insertErr || !docRow) {
+    // Clean up orphaned file if DB row insert fails
+    await supabase.storage.from('admission-documents').remove([storagePath]);
+    throw new Error(insertErr?.message || 'Unable to record uploaded document metadata.');
+  }
+
+  if (isPassport) {
+    await supabase
+      .from('admission_applications')
+      .update({ passport_photo_path: storagePath })
+      .eq('id', applicationId);
+  }
+
+  return docRow as DbAdmissionDocument;
+}
+
+export async function deleteAdmissionDocument(
+  supabase: SupabaseClient,
+  doc: Pick<DbAdmissionDocument, 'id' | 'application_id' | 'document_type' | 'storage_path'>
+): Promise<void> {
+  const { error } = await supabase.from('admission_documents').delete().eq('id', doc.id);
+  if (error) throw new Error(error.message);
+
+  await supabase.storage.from('admission-documents').remove([doc.storage_path]);
+
+  if (doc.document_type === 'passport_photo') {
+    await supabase
+      .from('admission_applications')
+      .update({ passport_photo_path: null })
+      .eq('id', doc.application_id)
+      .eq('passport_photo_path', doc.storage_path);
+  }
+}
+
+export async function checkPotentialDuplicateApplication(
+  supabase: SupabaseClient,
+  params: {
+    profileId: string;
+    firstName: string;
+    lastName: string;
+    dateOfBirth: string;
+    sessionId: string;
+    excludeApplicationId?: string;
+  }
+): Promise<{ isDuplicate: boolean; existingReference?: string }> {
+  const { profileId, firstName, lastName, dateOfBirth, sessionId, excludeApplicationId } = params;
+  const { data } = await supabase
+    .from('admission_applications')
+    .select('id, application_reference, application_status')
+    .eq('applicant_profile_id', profileId)
+    .eq('intended_session_id', sessionId)
+    .eq('child_date_of_birth', dateOfBirth)
+    .ilike('child_first_name', firstName.trim())
+    .ilike('child_last_name', lastName.trim())
+    .neq('application_status', 'rejected');
+
+  const match = (data ?? []).find((row) => row.id !== excludeApplicationId);
+  if (match) {
+    return { isDuplicate: true, existingReference: match.application_reference };
+  }
+  return { isDuplicate: false };
+}
+
+export async function fetchParentWorkspaceProfile(
+  supabase: SupabaseClient,
+  profileId: string
+): Promise<ParentWorkspaceProfile | null> {
+  const [{ data: profileRow, error: profErr }, { data: parentRow }] = await Promise.all([
+    supabase.from('profiles').select('*').eq('id', profileId).maybeSingle(),
+    supabase.from('parents').select('*').eq('profile_id', profileId).maybeSingle(),
+  ]);
+
+  if (profErr) throw new Error(profErr.message);
+  if (!profileRow) return null;
+
+  return {
+    profileId: profileRow.id,
+    parentId: parentRow?.id ?? null,
+    first_name: profileRow.first_name || '',
+    last_name: profileRow.last_name || '',
+    email: profileRow.email || '',
+    phone: profileRow.phone || '',
+    alternate_phone: parentRow?.alternate_phone || '',
+    occupation: parentRow?.occupation || '',
+    residential_address: parentRow?.residential_address || '',
+  };
+}
+
+export async function updateParentWorkspaceProfile(
+  supabase: SupabaseClient,
+  profileId: string,
+  input: {
+    first_name: string;
+    last_name: string;
+    phone: string;
+    alternate_phone: string;
+    occupation: string;
+    residential_address: string;
+  }
+): Promise<void> {
+  const { error: profErr } = await supabase
+    .from('profiles')
+    .update({
+      first_name: input.first_name.trim(),
+      last_name: input.last_name.trim(),
+      phone: input.phone.trim() || null,
+    })
+    .eq('id', profileId);
+
+  if (profErr) throw new Error(profErr.message);
+
+  const { data: existingParent } = await supabase
+    .from('parents')
+    .select('id')
+    .eq('profile_id', profileId)
+    .maybeSingle();
+
+  if (existingParent) {
+    const { error: parErr } = await supabase
+      .from('parents')
+      .update({
+        alternate_phone: input.alternate_phone.trim() || null,
+        occupation: input.occupation.trim() || null,
+        residential_address: input.residential_address.trim() || null,
+      })
+      .eq('profile_id', profileId);
+    if (parErr) throw new Error(parErr.message);
+  } else {
+    const { error: insErr } = await supabase.from('parents').insert({
+      profile_id: profileId,
+      alternate_phone: input.alternate_phone.trim() || null,
+      occupation: input.occupation.trim() || null,
+      residential_address: input.residential_address.trim() || null,
+    });
+    if (insErr) throw new Error(insErr.message);
+  }
+}
+
+export async function fetchParentApplicationPayments(
+  supabase: SupabaseClient,
+  profileId: string
+): Promise<ApplicationPaymentWithChild[]> {
+  const { data, error } = await supabase
+    .from('application_payments')
+    .select(`
+      *,
+      admission_applications (
+        id,
+        application_reference,
+        child_first_name,
+        child_last_name
+      )
+    `)
+    .eq('payer_profile_id', profileId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ApplicationPaymentWithChild[];
+}
+
+export async function fetchParentAnnouncements(
+  supabase: SupabaseClient
+): Promise<DbAnnouncement[]> {
+  const { data, error } = await supabase
+    .from('announcements')
+    .select('*')
+    .eq('is_published', true)
+    .in('audience', ['public', 'all', 'parents'])
+    .order('published_at', { ascending: false })
+    .limit(10);
+
+  if (error) return [];
+  return (data ?? []) as DbAnnouncement[];
+}
+
+export async function initializeApplicationFeeCheckout(
+  clerkToken: string | null,
+  applicationId: string,
+  callbackUrl?: string
+): Promise<
+  | { ready: true; authorizationUrl: string; reference: string }
+  | { ready: false; reason: string }
+> {
+  const res = await callVerifiedNetlifyEndpoint<{
+    status?: string;
+    authorizationUrl?: string;
+    reference?: string;
+  }>('/.netlify/functions/paystack-initialize', clerkToken, {
+    method: 'POST',
+    body: {
+      applicationId,
+      ...(callbackUrl ? { callbackUrl } : {}),
+    },
+  });
+
+  if (res.ok && res.data.authorizationUrl && res.data.reference) {
+    return {
+      ready: true,
+      authorizationUrl: res.data.authorizationUrl,
+      reference: res.data.reference,
+    };
+  }
+
+  if (!res.ok) {
+    return {
+      ready: false,
+      reason:
+        res.status === 404 || res.status === 0 || res.status === 503
+          ? 'Online Paystack checkout is prepared and will go live in Phase 5 once the school connects its Paystack keys.'
+          : res.error,
+    };
+  }
+
+  return {
+    ready: false,
+    reason: 'Paystack checkout initialization is not yet active.',
+  };
+}
+
+

@@ -16,6 +16,7 @@ import { UserButton } from '@clerk/react';
 import { Logo } from '../branding/Logo';
 import { SCHOOL_INFO } from '../../constants/data';
 import { useAppAuth } from '../../context/AuthContext';
+import { usePublicSchoolSettings } from '../../hooks/usePublicSchoolSettings';
 
 export const Header: React.FC = () => {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -26,6 +27,7 @@ export const Header: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { isConfigured, isLoaded, isSignedIn, user, signOut } = useAppAuth();
+  const { contactInfo } = usePublicSchoolSettings();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -68,16 +70,31 @@ export const Header: React.FC = () => {
       <div className="hidden lg:block bg-[#091C30] text-slate-300 text-xs py-1.5 px-4 mb-2">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex items-center gap-6">
-            <a href={`tel:${SCHOOL_INFO.phone}`} className="flex items-center gap-1.5 hover:text-[#D9B76A] transition-colors">
-              <Phone className="w-3.5 h-3.5 text-[#D9B76A]" />
-              <span>{SCHOOL_INFO.phone}</span>
-            </a>
-            <a href={`mailto:${SCHOOL_INFO.email}`} className="flex items-center gap-1.5 hover:text-[#D9B76A] transition-colors">
-              <Mail className="w-3.5 h-3.5 text-[#D9B76A]" />
-              <span>{SCHOOL_INFO.email}</span>
-            </a>
-            <span className="text-slate-400">|</span>
-            <span className="text-slate-300">{SCHOOL_INFO.hours}</span>
+            {contactInfo?.configured && contactInfo.phone && (
+              <a
+                href={`tel:${contactInfo.phone}`}
+                className="flex items-center gap-1.5 hover:text-[#D9B76A] transition-colors"
+              >
+                <Phone className="w-3.5 h-3.5 text-[#D9B76A]" />
+                <span>{contactInfo.phone}</span>
+              </a>
+            )}
+            {contactInfo?.configured && contactInfo.email && (
+              <a
+                href={`mailto:${contactInfo.email}`}
+                className="flex items-center gap-1.5 hover:text-[#D9B76A] transition-colors"
+              >
+                <Mail className="w-3.5 h-3.5 text-[#D9B76A]" />
+                <span>{contactInfo.email}</span>
+              </a>
+            )}
+            {contactInfo?.configured && contactInfo.hours && (
+              <span className="text-slate-300">{contactInfo.hours}</span>
+            )}
+            {(!contactInfo?.configured ||
+              (!contactInfo.phone && !contactInfo.email && !contactInfo.hours)) && (
+              <span className="text-slate-300 font-medium">{SCHOOL_INFO.name}</span>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <span className="text-[#D9B76A] font-medium tracking-wide">{SCHOOL_INFO.levels}</span>
@@ -188,7 +205,7 @@ export const Header: React.FC = () => {
             Portal
           </NavLink>
           <NavLink
-            to="/portal"
+            to="/apply"
             className="flex items-center gap-2 bg-[#D9B76A] hover:bg-[#c9a658] text-[#102B46] px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-all hover:shadow"
           >
             <span>Apply Now</span>
@@ -199,7 +216,7 @@ export const Header: React.FC = () => {
         {/* Mobile menu button */}
         <div className="flex items-center gap-2 lg:hidden">
           <NavLink
-            to="/portal"
+            to="/apply"
             className="bg-[#D9B76A] text-[#102B46] px-3.5 py-2 rounded-lg font-bold text-xs shadow-sm"
           >
             Apply
@@ -337,16 +354,22 @@ export const Header: React.FC = () => {
             )}
           </div>
 
-          <div className="mt-6 pt-6 border-t border-slate-100 flex flex-col gap-3 text-xs text-slate-600">
-            <div className="flex items-center gap-2">
-              <Phone className="w-4 h-4 text-[#D9B76A]" />
-              <span>{SCHOOL_INFO.phone}</span>
+          {contactInfo?.configured && (contactInfo.phone || contactInfo.email) && (
+            <div className="mt-6 pt-6 border-t border-slate-100 flex flex-col gap-3 text-xs text-slate-600">
+              {contactInfo.phone && (
+                <div className="flex items-center gap-2">
+                  <Phone className="w-4 h-4 text-[#D9B76A]" />
+                  <span>{contactInfo.phone}</span>
+                </div>
+              )}
+              {contactInfo.email && (
+                <div className="flex items-center gap-2">
+                  <Mail className="w-4 h-4 text-[#D9B76A]" />
+                  <span>{contactInfo.email}</span>
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-2">
-              <Mail className="w-4 h-4 text-[#D9B76A]" />
-              <span>{SCHOOL_INFO.email}</span>
-            </div>
-          </div>
+          )}
         </div>
       )}
     </header>

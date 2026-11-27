@@ -1,49 +1,81 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { SupabaseClient } from '@supabase/supabase-js';
 import {
+  AlertCircle,
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
-  CheckCircle2,
+  Camera,
+  Edit3,
+  ExternalLink,
   FileText,
   HeartPulse,
   Loader2,
   Save,
   School,
   Send,
+  Trash2,
+  Upload,
   UserCheck,
   Users,
-  AlertCircle,
 } from 'lucide-react';
 import {
   AdmissionApplicationExpanded,
   AdmissionFormInput,
   AdmissionReferenceLookups,
+  ParentWorkspaceProfile,
 } from '../../types/admissions';
+import { AdmissionDocumentType, DbAdmissionDocument } from '../../types/database';
 import { AuthenticatedUserProfile } from '../../types/auth';
-import { formatNairaFromKobo } from '../../services/admissionsService';
+import {
+  checkPotentialDuplicateApplication,
+  createAdmissionDocumentSignedUrl,
+  deleteAdmissionDocument,
+  fetchApplicationDocuments,
+  formatNairaFromKobo,
+  uploadAdmissionDocument,
+} from '../../services/admissionsService';
 
 interface ParentApplicationFormProps {
   user: AuthenticatedUserProfile | null;
+  supabase: SupabaseClient | null;
+  profileId: string | null;
+  parentProfile?: ParentWorkspaceProfile | null;
   lookups: AdmissionReferenceLookups;
   initialApplication?: AdmissionApplicationExpanded | null;
   isSubmitting: boolean;
+  onEnsureDraftId: (input: AdmissionFormInput) => Promise<string>;
   onSaveDraft: (input: AdmissionFormInput) => Promise<void>;
   onSubmitApplication: (input: AdmissionFormInput) => Promise<void>;
   onCancel: () => void;
 }
 
 const STEPS = [
-  { id: 1, title: 'Child Information', icon: UserCheck },
-  { id: 2, title: 'Parent & Emergency', icon: Users },
+  { id: 1, title: 'Child Info', icon: UserCheck },
+  { id: 2, title: 'Parent & Guardian', icon: Users },
   { id: 3, title: 'Previous School', icon: School },
-  { id: 4, title: 'Health & Care Notes', icon: HeartPulse },
-  { id: 5, title: 'Review & Declaration', icon: FileText },
+  { id: 4, title: 'Additional & Medical', icon: HeartPulse },
+  { id: 5, title: 'Review & Submit', icon: FileText },
 ];
+
+const DOCUMENT_TYPE_LABELS: Record<AdmissionDocumentType, string> = {
+  passport_photo: 'Passport Photograph',
+  birth_certificate: 'Birth Certificate / Age Declaration',
+  previous_report_card: 'Previous School Report Card',
+  transfer_certificate: 'Transfer Certificate',
+  medical_report: 'Immunization / Medical Record',
+  other: 'Other Supporting Document',
+};
 
 export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
   user,
+  supabase,
+  profileId,
+  parentProfile,
   lookups,
   initialApplication,
   isSubmitting,
+  onEnsureDraftId,
   onSaveDraft,
   onSubmitApplication,
   onCancel,
@@ -54,6 +86,27 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
 
   const [step, setStep] = useState(1);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+  const [duplicateConfirmed, setDuplicateConfirmed] = useState(false);
+
+  const [documents, setDocuments] = useState<DbAdmissionDocument[]>(
+    initialApplication?.documents ?? []
+  );
+  const [passportSignedUrl, setPassportSignedUrl] = useState<string | null>(null);
+  const [docSignedUrls, setDocSignedUrls] = useState<Record<string, string>>({});
+  const [isUploadingPassport, setIsUploadingPassport] = useState(false);
+  const [isUploadingDoc, setIsUploadingDoc] = useState(false);
+  const [selectedDocType, setSelectedDocType] =
+    useState<AdmissionDocumentType>('birth_certificate');
+
+  const defaultParentName = useMemo(() => {
+    if (initialApplication?.parent_full_name) return initialApplication.parent_full_name;
+    if (parentProfile) {
+      const full = `${parentProfile.first_name} ${parentProfile.last_name}`.trim();
+      if (full) return full;
+    }
+    return user?.fullName || '';
+  }, [initialApplication?.parent_full_name, parentProfile, user?.fullName]);
 
   const [form, setForm] = useState<AdmissionFormInput>(() => {
     const initialSectionId =
@@ -78,15 +131,21 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
       intended_class_level_id: initialLevelId,
       intended_session_id:
         initialApplication?.intended_session_id || currentSession?.id || '',
-      parent_full_name:
-        initialApplication?.parent_full_name || user?.fullName || '',
-      parent_relationship: initialApplication?.parent_relationship || 'Parent',
+      passport_photo_path: initialApplication?.passport_photo_path || '',
+      parent_full_name: defaultParentName,
+      parent_relationship: initialApplication?.parent_relationship || 'Mother',
       parent_email:
-        initialApplication?.parent_email || user?.primaryEmail || '',
-      parent_phone: initialApplication?.parent_phone || '',
-      parent_alternate_phone: initialApplication?.parent_alternate_phone || '',
-      residential_address: initialApplication?.residential_address || '',
-      parent_occupation: initialApplication?.parent_occupation || '',
+        initialApplication?.parent_email ||
+        parentProfile?.email ||
+        user?.primaryEmail ||
+        '',
+      parent_phone: initialApplication?.parent_phone || parentProfile?.phone || '',
+      parent_alternate_phone:
+        initialApplication?.parent_alternate_phone || parentProfile?.alternate_phone || '',
+      residential_address:
+        initialApplication?.residential_address || parentProfile?.residential_address || '',
+      parent_occupation:
+        initialApplication?.parent_occupation || parentProfile?.occupation || '',
       emergency_contact_name: initialApplication?.emergency_contact_name || '',
       emergency_contact_phone: initialApplication?.emergency_contact_phone || '',
       emergency_contact_relationship:
@@ -100,6 +159,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
       previous_class: initialApplication?.previous_class || '',
       previous_school_address:
         initialApplication?.previous_school_address || '',
+      reason_for_leaving: initialApplication?.reason_for_leaving || '',
       additional_details: initialApplication?.additional_details || '',
       blood_group: initialApplication?.medical_details?.blood_group || '',
       genotype: initialApplication?.medical_details?.genotype || '',
@@ -114,9 +174,41 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
         initialApplication?.medical_details?.emergency_medical_notes || '',
       declaration_accepted: initialApplication?.declaration_accepted ?? false,
       declaration_signer_name:
-        initialApplication?.declaration_signer_name || user?.fullName || '',
+        initialApplication?.declaration_signer_name || defaultParentName,
     };
   });
+
+  // Load documents & signed URLs when an existing/draft application ID is available
+  useEffect(() => {
+    const loadDocs = async () => {
+      if (!supabase || !form.id) return;
+      try {
+        const docs = await fetchApplicationDocuments(supabase, form.id);
+        setDocuments(docs);
+
+        const passportDoc = docs.find((d) => d.document_type === 'passport_photo');
+        const passportPath = passportDoc?.storage_path || form.passport_photo_path;
+        if (passportPath) {
+          const url = await createAdmissionDocumentSignedUrl(supabase, passportPath, 600);
+          setPassportSignedUrl(url);
+        } else {
+          setPassportSignedUrl(null);
+        }
+
+        const urlMap: Record<string, string> = {};
+        await Promise.all(
+          docs.map(async (doc) => {
+            const url = await createAdmissionDocumentSignedUrl(supabase, doc.storage_path, 600);
+            if (url) urlMap[doc.id] = url;
+          })
+        );
+        setDocSignedUrls(urlMap);
+      } catch {
+        // Non-blocking if documents haven't been uploaded yet
+      }
+    };
+    void loadDocs();
+  }, [supabase, form.id, form.passport_photo_path]);
 
   const selectedSection = useMemo(
     () => lookups.sections.find((s) => s.id === form.intended_section_id) ?? null,
@@ -148,6 +240,8 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
     value: AdmissionFormInput[K]
   ) => {
     setValidationError(null);
+    setDuplicateWarning(null);
+    setDuplicateConfirmed(false);
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -174,7 +268,11 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
       if (!form.child_date_of_birth) {
         return "Please select the child's date of birth.";
       }
-      if (!form.intended_section_id || !form.intended_class_level_id || !form.intended_session_id) {
+      if (
+        !form.intended_section_id ||
+        !form.intended_class_level_id ||
+        !form.intended_session_id
+      ) {
         return 'Please select the intended educational section, class level, and academic session.';
       }
     }
@@ -210,7 +308,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
         if (err) return err;
       }
       if (!form.declaration_accepted) {
-        return 'Please review and accept the parent/guardian declaration before submitting.';
+        return 'Please review and confirm that all submitted information is accurate.';
       }
       if (!form.declaration_signer_name.trim()) {
         return 'Please enter your full name in the electronic signature box.';
@@ -218,6 +316,132 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
     }
 
     return null;
+  };
+
+  const handlePassportUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !supabase || !profileId) return;
+
+    const step1Err = validateStep(1);
+    if (step1Err) {
+      setValidationError(
+        `Before uploading a passport photograph, complete Step 1 details: ${step1Err}`
+      );
+      return;
+    }
+
+    setIsUploadingPassport(true);
+    setValidationError(null);
+    try {
+      const appId = form.id || (await onEnsureDraftId(form));
+      if (!form.id) {
+        setForm((prev) => ({ ...prev, id: appId }));
+      }
+
+      // Remove existing passport document if replacing
+      const existingPassports = documents.filter(
+        (d) => d.document_type === 'passport_photo'
+      );
+      for (const oldDoc of existingPassports) {
+        await deleteAdmissionDocument(supabase, oldDoc).catch(() => undefined);
+      }
+
+      const uploaded = await uploadAdmissionDocument(supabase, {
+        applicationId: appId,
+        profileId,
+        documentType: 'passport_photo',
+        file,
+      });
+
+      const signed = await createAdmissionDocumentSignedUrl(
+        supabase,
+        uploaded.storage_path,
+        600
+      );
+
+      setDocuments((prev) => [
+        uploaded,
+        ...prev.filter((d) => d.document_type !== 'passport_photo'),
+      ]);
+      setForm((prev) => ({ ...prev, passport_photo_path: uploaded.storage_path }));
+      setPassportSignedUrl(signed);
+      if (signed) {
+        setDocSignedUrls((prev) => ({ ...prev, [uploaded.id]: signed }));
+      }
+    } catch (err) {
+      setValidationError(
+        err instanceof Error ? err.message : 'Unable to upload passport photograph.'
+      );
+    } finally {
+      setIsUploadingPassport(false);
+    }
+  };
+
+  const handleSupportingDocUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !supabase || !profileId) return;
+
+    const step1Err = validateStep(1);
+    if (step1Err) {
+      setValidationError(
+        `Complete Child Information (Step 1) before uploading documents: ${step1Err}`
+      );
+      setStep(1);
+      return;
+    }
+
+    setIsUploadingDoc(true);
+    setValidationError(null);
+    try {
+      const appId = form.id || (await onEnsureDraftId(form));
+      if (!form.id) {
+        setForm((prev) => ({ ...prev, id: appId }));
+      }
+
+      const uploaded = await uploadAdmissionDocument(supabase, {
+        applicationId: appId,
+        profileId,
+        documentType: selectedDocType,
+        file,
+      });
+      const signed = await createAdmissionDocumentSignedUrl(
+        supabase,
+        uploaded.storage_path,
+        600
+      );
+
+      setDocuments((prev) => [uploaded, ...prev]);
+      if (signed) {
+        setDocSignedUrls((prev) => ({ ...prev, [uploaded.id]: signed }));
+      }
+    } catch (err) {
+      setValidationError(
+        err instanceof Error ? err.message : 'Unable to upload supporting document.'
+      );
+    } finally {
+      setIsUploadingDoc(false);
+    }
+  };
+
+  const handleDeleteDocument = async (doc: DbAdmissionDocument) => {
+    if (!supabase) return;
+    setValidationError(null);
+    try {
+      await deleteAdmissionDocument(supabase, doc);
+      setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+      if (doc.document_type === 'passport_photo') {
+        setPassportSignedUrl(null);
+        setForm((prev) => ({ ...prev, passport_photo_path: '' }));
+      }
+    } catch (err) {
+      setValidationError(
+        err instanceof Error ? err.message : 'Unable to remove uploaded file.'
+      );
+    }
   };
 
   const handleNextStep = () => {
@@ -247,6 +471,25 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
       setValidationError(err);
       return;
     }
+
+    // Check for potential duplicate application for the same child & academic session
+    if (supabase && profileId && !duplicateConfirmed) {
+      const dup = await checkPotentialDuplicateApplication(supabase, {
+        profileId,
+        firstName: form.child_first_name,
+        lastName: form.child_last_name,
+        dateOfBirth: form.child_date_of_birth,
+        sessionId: form.intended_session_id,
+        excludeApplicationId: form.id,
+      });
+      if (dup.isDuplicate) {
+        setDuplicateWarning(
+          `An active application (${dup.existingReference}) already exists for ${form.child_first_name} ${form.child_last_name} in this academic session. Tick the confirmation box below if you intentionally want to submit another record.`
+        );
+        return;
+      }
+    }
+
     setValidationError(null);
     await onSubmitApplication(form);
   };
@@ -255,18 +498,21 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
     lookups.admissionSettings?.application_fee_kobo
   );
 
+  const passportDoc = documents.find((d) => d.document_type === 'passport_photo');
+  const supportingDocs = documents.filter((d) => d.document_type !== 'passport_photo');
+
   return (
-    <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+    <div className="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden max-w-full">
       {/* Form Top Bar */}
       <div className="bg-[#102B46] text-white p-5 sm:p-7 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <span className="text-[11px] font-bold uppercase tracking-widest text-[#D9B76A]">
-            Online Admission Application
+            Step {step} of 5 • Online Admission Application
           </span>
-          <h2 className="text-xl sm:text-2xl font-extrabold font-['Manrope'] mt-0.5">
+          <h2 className="text-xl sm:text-2xl font-extrabold font-['Manrope'] mt-0.5 truncate">
             {initialApplication
               ? `Continue Application (${initialApplication.application_reference})`
-              : 'Start New Child Application'}
+              : 'New Child Admission Application'}
           </h2>
           {initialApplication?.application_status === 'correction_requested' &&
             initialApplication.correction_notes && (
@@ -279,7 +525,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
         <button
           type="button"
           onClick={onCancel}
-          className="self-start sm:self-center inline-flex items-center gap-1.5 text-xs font-bold bg-white/10 hover:bg-white/20 px-4 py-2 rounded-xl transition-colors"
+          className="self-start sm:self-center inline-flex items-center gap-1.5 text-xs font-bold bg-white/10 hover:bg-white/20 px-4 min-h-[44px] rounded-xl transition-colors shrink-0"
         >
           <ArrowLeft className="w-4 h-4 text-[#D9B76A]" />
           <span>Back to Applications</span>
@@ -301,7 +547,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   setValidationError(null);
                   setStep(s.id);
                 }}
-                className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
+                className={`inline-flex items-center gap-2 px-3.5 min-h-[44px] rounded-xl text-xs font-bold transition-colors ${
                   active
                     ? 'bg-[#102B46] text-white shadow-sm'
                     : completed
@@ -327,12 +573,12 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
           </div>
         )}
 
-        {/* STEP 1: Child Information */}
+        {/* STEP 1: Child Information + Passport Upload */}
         {step === 1 && (
           <div className="space-y-6">
             <div>
               <h3 className="text-lg font-extrabold text-[#102B46] font-['Manrope']">
-                Section A — Child / Applicant Information & Intended Placement
+                Step 1 — Child Information & Intended Placement
               </h3>
               <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
                 Enter the prospective pupil or student&apos;s official details exactly as they
@@ -348,7 +594,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                 <select
                   value={form.intended_section_id}
                   onChange={(e) => handleSectionChange(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
                   required
                 >
                   {lookups.sections.map((sec) => (
@@ -366,7 +612,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                 <select
                   value={form.intended_class_level_id}
                   onChange={(e) => updateField('intended_class_level_id', e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
                   required
                 >
                   {availableClassLevels.map((lvl) => (
@@ -384,7 +630,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                 <select
                   value={form.intended_session_id}
                   onChange={(e) => updateField('intended_session_id', e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
                   required
                 >
                   {lookups.sessions.map((ses) => (
@@ -414,7 +660,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   value={form.child_first_name}
                   onChange={(e) => updateField('child_first_name', e.target.value)}
                   placeholder="e.g. Chinedu"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                   required
                 />
               </div>
@@ -427,7 +673,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   value={form.child_middle_name}
                   onChange={(e) => updateField('child_middle_name', e.target.value)}
                   placeholder="Optional"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                 />
               </div>
               <div>
@@ -439,13 +685,13 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   value={form.child_last_name}
                   onChange={(e) => updateField('child_last_name', e.target.value)}
                   placeholder="e.g. Adeyemi"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                   required
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-bold text-[#102B46] mb-1.5">
                   Date of Birth *
@@ -454,7 +700,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   type="date"
                   value={form.child_date_of_birth}
                   onChange={(e) => updateField('child_date_of_birth', e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                   required
                 />
               </div>
@@ -467,65 +713,90 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   onChange={(e) =>
                     updateField('child_gender', e.target.value as 'male' | 'female')
                   }
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
                 >
                   <option value="female">Female</option>
                   <option value="male">Male</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-xs font-bold text-[#102B46] mb-1.5">
-                  Nationality
-                </label>
-                <input
-                  type="text"
-                  value={form.child_nationality}
-                  onChange={(e) => updateField('child_nationality', e.target.value)}
-                  placeholder="Nigerian"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
-                />
-              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-[#102B46] mb-1.5">
-                  State of Origin
-                </label>
-                <input
-                  type="text"
-                  value={form.child_state_of_origin}
-                  onChange={(e) => updateField('child_state_of_origin', e.target.value)}
-                  placeholder="e.g. Lagos / Ogun / Anambra"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
-                />
+            {/* Optional Passport Photograph Upload */}
+            <div className="bg-[#F5F3ED] border border-slate-200 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4">
+              <div className="w-24 h-28 rounded-xl border-2 border-[#102B46]/30 bg-white flex items-center justify-center overflow-hidden shrink-0">
+                {passportSignedUrl ? (
+                  <img
+                    src={passportSignedUrl}
+                    alt="Applicant passport preview"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="text-center text-[10px] font-bold text-slate-400 px-2">
+                    <Camera className="w-5 h-5 mx-auto mb-1 text-slate-400" />
+                    <span>Passport (Optional)</span>
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="block text-xs font-bold text-[#102B46] mb-1.5">
-                  Local Government Area (LGA)
-                </label>
-                <input
-                  type="text"
-                  value={form.child_lga}
-                  onChange={(e) => updateField('child_lga', e.target.value)}
-                  placeholder="Optional"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
-                />
+
+              <div className="flex-1 space-y-2">
+                <div className="text-sm font-extrabold text-[#102B46] font-['Manrope']">
+                  Child Passport Photograph (Optional)
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Upload a clear recent passport photograph (JPG, PNG, or WebP, max 5 MB). It is
+                  stored securely in private admissions storage and placed onto your official A4
+                  application form. You may also affix physical photos after printing.
+                </p>
+
+                <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                  <label className="inline-flex items-center gap-2 px-4 min-h-[44px] rounded-xl bg-[#102B46] hover:bg-[#091C30] text-white text-xs font-bold cursor-pointer transition-colors">
+                    {isUploadingPassport ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-[#D9B76A]" />
+                    ) : (
+                      <Upload className="w-4 h-4 text-[#D9B76A]" />
+                    )}
+                    <span>
+                      {isUploadingPassport
+                        ? 'Uploading...'
+                        : passportSignedUrl
+                          ? 'Replace Photo'
+                          : 'Upload Passport Photo'}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      disabled={isUploadingPassport || isSubmitting}
+                      onChange={(e) => void handlePassportUpload(e)}
+                      className="sr-only"
+                    />
+                  </label>
+
+                  {passportDoc && (
+                    <button
+                      type="button"
+                      onClick={() => void handleDeleteDocument(passportDoc)}
+                      className="inline-flex items-center gap-1.5 px-3.5 min-h-[44px] rounded-xl border border-red-200 bg-white text-red-700 hover:bg-red-50 text-xs font-bold"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Remove</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* STEP 2: Parent / Guardian & Emergency Contact */}
+        {/* STEP 2: Parent / Guardian Information */}
         {step === 2 && (
           <div className="space-y-6">
             <div>
               <h3 className="text-lg font-extrabold text-[#102B46] font-['Manrope']">
-                Section B — Parent / Guardian & Emergency Contact Information
+                Step 2 — Parent / Guardian & Emergency Contact Information
               </h3>
               <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
-                Your verified account details are pre-filled. Please confirm active phone
-                numbers and an emergency contact person.
+                Confirm your family contact details and provide a reachable emergency contact
+                person.
               </p>
             </div>
 
@@ -538,7 +809,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   type="text"
                   value={form.parent_full_name}
                   onChange={(e) => updateField('parent_full_name', e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                   required
                 />
               </div>
@@ -549,7 +820,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                 <select
                   value={form.parent_relationship}
                   onChange={(e) => updateField('parent_relationship', e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
                 >
                   <option value="Mother">Mother</option>
                   <option value="Father">Father</option>
@@ -568,7 +839,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   type="email"
                   value={form.parent_email}
                   onChange={(e) => updateField('parent_email', e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                   required
                 />
               </div>
@@ -581,7 +852,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   value={form.parent_phone}
                   onChange={(e) => updateField('parent_phone', e.target.value)}
                   placeholder="+234..."
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                   required
                 />
               </div>
@@ -594,7 +865,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   value={form.parent_alternate_phone}
                   onChange={(e) => updateField('parent_alternate_phone', e.target.value)}
                   placeholder="Optional"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                 />
               </div>
             </div>
@@ -609,7 +880,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   value={form.residential_address}
                   onChange={(e) => updateField('residential_address', e.target.value)}
                   placeholder="House number, street, area, city"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                   required
                 />
               </div>
@@ -622,7 +893,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   value={form.parent_occupation}
                   onChange={(e) => updateField('parent_occupation', e.target.value)}
                   placeholder="Optional"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                 />
               </div>
             </div>
@@ -640,7 +911,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                     type="text"
                     value={form.emergency_contact_name}
                     onChange={(e) => updateField('emergency_contact_name', e.target.value)}
-                    className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                    className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                     required
                   />
                 </div>
@@ -652,7 +923,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                     type="tel"
                     value={form.emergency_contact_phone}
                     onChange={(e) => updateField('emergency_contact_phone', e.target.value)}
-                    className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                    className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                     required
                   />
                 </div>
@@ -667,7 +938,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                       updateField('emergency_contact_relationship', e.target.value)
                     }
                     placeholder="e.g. Aunt / Uncle / Family Doctor"
-                    className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                    className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                     required
                   />
                 </div>
@@ -681,7 +952,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
           <div className="space-y-6">
             <div>
               <h3 className="text-lg font-extrabold text-[#102B46] font-['Manrope']">
-                Section C — Previous School / Early Years Background
+                Step 3 — Previous School Information
               </h3>
               <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
                 {isCreche
@@ -690,7 +961,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
               </p>
             </div>
 
-            <label className="flex items-start gap-3 bg-[#F5F3ED] border border-slate-200 rounded-2xl p-4 cursor-pointer">
+            <label className="flex items-start gap-3 bg-[#F5F3ED] border border-slate-200 rounded-2xl p-4 cursor-pointer min-h-[44px]">
               <input
                 type="checkbox"
                 checked={form.is_first_time_schooling}
@@ -715,45 +986,59 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                       value={form.previous_school_name}
                       onChange={(e) => updateField('previous_school_name', e.target.value)}
                       placeholder="Full name of previous school"
-                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                      className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                     />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-[#102B46] mb-1.5">
-                      Previous / Current Class
+                      Last Class Attended
                     </label>
                     <input
                       type="text"
                       value={form.previous_class}
                       onChange={(e) => updateField('previous_class', e.target.value)}
                       placeholder="e.g. Nursery 2 / Primary 3 / JSS 1"
-                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                      className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-[#102B46] mb-1.5">
-                    Previous School Address
-                  </label>
-                  <input
-                    type="text"
-                    value={form.previous_school_address}
-                    onChange={(e) => updateField('previous_school_address', e.target.value)}
-                    placeholder="City / address of previous school"
-                    className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-[#102B46] mb-1.5">
+                      Previous School Address
+                    </label>
+                    <input
+                      type="text"
+                      value={form.previous_school_address}
+                      onChange={(e) => updateField('previous_school_address', e.target.value)}
+                      placeholder="City / address of previous school"
+                      className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[#102B46] mb-1.5">
+                      Reason for Leaving (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={form.reason_for_leaving}
+                      onChange={(e) => updateField('reason_for_leaving', e.target.value)}
+                      placeholder="e.g. Relocation / Progression to Secondary"
+                      className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* STEP 4: Additional & Medical Information */}
+        {/* STEP 4: Additional & Medical Information + Optional Supporting Documents */}
         {step === 4 && (
           <div className="space-y-6">
             <div>
               <h3 className="text-lg font-extrabold text-[#102B46] font-['Manrope']">
-                Section D — Health, Allergies & Special Care Information
+                Step 4 — Additional Origin, Health & Supporting Documents
               </h3>
               <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
                 Medical records are stored in a restricted database table accessible only to you,
@@ -764,12 +1049,51 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-bold text-[#102B46] mb-1.5">
+                  Nationality
+                </label>
+                <input
+                  type="text"
+                  value={form.child_nationality}
+                  onChange={(e) => updateField('child_nationality', e.target.value)}
+                  placeholder="Nigerian"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-[#102B46] mb-1.5">
+                  State of Origin
+                </label>
+                <input
+                  type="text"
+                  value={form.child_state_of_origin}
+                  onChange={(e) => updateField('child_state_of_origin', e.target.value)}
+                  placeholder="e.g. Lagos / Ogun / Anambra"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-[#102B46] mb-1.5">
+                  Local Government Area (LGA)
+                </label>
+                <input
+                  type="text"
+                  value={form.child_lga}
+                  onChange={(e) => updateField('child_lga', e.target.value)}
+                  placeholder="Optional"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-[#102B46] mb-1.5">
                   Blood Group
                 </label>
                 <select
                   value={form.blood_group}
                   onChange={(e) => updateField('blood_group', e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
                 >
                   <option value="">Not specified</option>
                   <option value="O+">O+</option>
@@ -789,7 +1113,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                 <select
                   value={form.genotype}
                   onChange={(e) => updateField('genotype', e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm bg-white focus:border-[#102B46] focus:outline-none"
                 >
                   <option value="">Not specified</option>
                   <option value="AA">AA</option>
@@ -808,7 +1132,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   value={form.allergies}
                   onChange={(e) => updateField('allergies', e.target.value)}
                   placeholder="Food, drug, environmental (or None)"
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                 />
               </div>
             </div>
@@ -866,79 +1190,265 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                 />
               </div>
             </div>
+
+            {/* Optional Digital Supporting Document Uploads */}
+            <div className="bg-[#F5F3ED] border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
+              <div>
+                <h4 className="text-sm font-extrabold text-[#102B46] font-['Manrope']">
+                  Supporting Documents (Optional Digital Pre-Upload)
+                </h4>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Optionally attach scans/photos of your child&apos;s Birth Certificate, Report Card,
+                  or Immunization Card (PDF, JPG, PNG, WebP, max 10 MB each). Original hardcopies are
+                  still verified at the Admissions Office.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <select
+                  value={selectedDocType}
+                  onChange={(e) =>
+                    setSelectedDocType(e.target.value as AdmissionDocumentType)
+                  }
+                  className="w-full sm:w-auto min-h-[44px] rounded-xl border border-slate-300 px-3.5 py-2 text-xs sm:text-sm bg-white"
+                >
+                  <option value="birth_certificate">Birth Certificate / Age Declaration</option>
+                  <option value="previous_report_card">Previous School Report Card</option>
+                  <option value="transfer_certificate">Transfer Certificate</option>
+                  <option value="medical_report">Immunization / Medical Record</option>
+                  <option value="other">Other Supporting Document</option>
+                </select>
+
+                <label className="inline-flex items-center justify-center gap-2 px-4 min-h-[44px] rounded-xl bg-[#102B46] hover:bg-[#091C30] text-white text-xs font-bold cursor-pointer transition-colors shrink-0">
+                  {isUploadingDoc ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-[#D9B76A]" />
+                  ) : (
+                    <Upload className="w-4 h-4 text-[#D9B76A]" />
+                  )}
+                  <span>{isUploadingDoc ? 'Uploading...' : 'Attach Document'}</span>
+                  <input
+                    type="file"
+                    accept="application/pdf,image/jpeg,image/png,image/webp"
+                    disabled={isUploadingDoc || isSubmitting}
+                    onChange={(e) => void handleSupportingDocUpload(e)}
+                    className="sr-only"
+                  />
+                </label>
+              </div>
+
+              {supportingDocs.length > 0 && (
+                <div className="space-y-2">
+                  {supportingDocs.map((doc) => (
+                    <div
+                      key={doc.id}
+                      className="flex items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-bold text-[#102B46] truncate">
+                          {DOCUMENT_TYPE_LABELS[doc.document_type] || doc.document_type}
+                        </div>
+                        <div className="text-[11px] text-slate-500 truncate">
+                          {doc.file_name}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {docSignedUrls[doc.id] && (
+                          <a
+                            href={docSignedUrls[doc.id]}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#F5F3ED] text-[#102B46] font-bold hover:bg-slate-200"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>View</span>
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteDocument(doc)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-50 text-red-700 font-bold hover:bg-red-100"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Remove</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {/* STEP 5: Review & Declaration */}
+        {/* STEP 5: Review & Submit */}
         {step === 5 && (
           <div className="space-y-6">
             <div>
               <h3 className="text-lg font-extrabold text-[#102B46] font-['Manrope']">
-                Section E — Review Application & Parent Declaration
+                Step 5 — Review Application & Submit
               </h3>
               <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
-                Confirm all details before submitting. After submission, the official A4 PDF
-                form unlocks once application fee payment is verified.
+                Confirm all details before submitting. Use any section&apos;s Edit button to make
+                updates before submission.
               </p>
             </div>
 
-            <div className="bg-[#F5F3ED] rounded-2xl border border-slate-200 p-5 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs sm:text-sm">
-              <div>
-                <span className="text-[11px] font-bold uppercase text-slate-500 block">
-                  Child Full Name
-                </span>
-                <strong className="text-[#102B46]">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs sm:text-sm">
+              {/* Step 1 Summary */}
+              <div className="bg-[#F5F3ED] rounded-2xl border border-slate-200 p-4 space-y-2">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <span className="font-extrabold text-[#102B46]">1. Child Information</span>
+                  <button
+                    type="button"
+                    onClick={() => setStep(1)}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-[#102B46] hover:text-[#D9B76A]"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit</span>
+                  </button>
+                </div>
+                <p>
+                  <strong>Name:</strong>{' '}
                   {[form.child_first_name, form.child_middle_name, form.child_last_name]
                     .filter(Boolean)
                     .join(' ') || '—'}
-                </strong>
+                </p>
+                <p>
+                  <strong>DOB &amp; Gender:</strong> {form.child_date_of_birth || '—'} (
+                  {form.child_gender})
+                </p>
+                <p>
+                  <strong>Placement:</strong> {selectedSection?.name || '—'} •{' '}
+                  {selectedClassLevel?.name || '—'} ({selectedSession?.name || '—'})
+                </p>
+                <p>
+                  <strong>Passport Photo:</strong>{' '}
+                  {passportSignedUrl ? 'Uploaded to private storage' : 'Not uploaded (can affix on printed form)'}
+                </p>
               </div>
-              <div>
-                <span className="text-[11px] font-bold uppercase text-slate-500 block">
-                  Intended Section / Class / Session
-                </span>
-                <strong className="text-[#102B46]">
-                  {selectedSection?.name || '—'} • {selectedClassLevel?.name || '—'} (
-                  {selectedSession?.name || '—'})
-                </strong>
+
+              {/* Step 2 Summary */}
+              <div className="bg-[#F5F3ED] rounded-2xl border border-slate-200 p-4 space-y-2">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <span className="font-extrabold text-[#102B46]">
+                    2. Parent &amp; Emergency Contact
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setStep(2)}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-[#102B46] hover:text-[#D9B76A]"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit</span>
+                  </button>
+                </div>
+                <p>
+                  <strong>Parent / Guardian:</strong> {form.parent_full_name} (
+                  {form.parent_relationship})
+                </p>
+                <p>
+                  <strong>Contact:</strong> {form.parent_phone} • {form.parent_email}
+                </p>
+                <p>
+                  <strong>Address:</strong> {form.residential_address}
+                </p>
+                <p>
+                  <strong>Emergency:</strong> {form.emergency_contact_name} (
+                  {form.emergency_contact_phone})
+                </p>
               </div>
-              <div>
-                <span className="text-[11px] font-bold uppercase text-slate-500 block">
-                  Date of Birth & Gender
-                </span>
-                <span>
-                  {form.child_date_of_birth || '—'} ({form.child_gender})
-                </span>
+
+              {/* Step 3 Summary */}
+              <div className="bg-[#F5F3ED] rounded-2xl border border-slate-200 p-4 space-y-2">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <span className="font-extrabold text-[#102B46]">3. Previous School</span>
+                  <button
+                    type="button"
+                    onClick={() => setStep(3)}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-[#102B46] hover:text-[#D9B76A]"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit</span>
+                  </button>
+                </div>
+                {form.is_first_time_schooling ? (
+                  <p>First-time school / Creche entrant</p>
+                ) : (
+                  <>
+                    <p>
+                      <strong>School:</strong> {form.previous_school_name || '—'} (
+                      {form.previous_class || 'N/A'})
+                    </p>
+                    {form.previous_school_address && (
+                      <p>
+                        <strong>Address:</strong> {form.previous_school_address}
+                      </p>
+                    )}
+                    {form.reason_for_leaving && (
+                      <p>
+                        <strong>Reason for Leaving:</strong> {form.reason_for_leaving}
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
-              <div>
-                <span className="text-[11px] font-bold uppercase text-slate-500 block">
-                  Parent / Guardian Contact
-                </span>
-                <span>
-                  {form.parent_full_name} • {form.parent_phone}
-                </span>
-              </div>
-              <div>
-                <span className="text-[11px] font-bold uppercase text-slate-500 block">
-                  Previous Schooling
-                </span>
-                <span>
-                  {form.is_first_time_schooling
-                    ? 'First-time school entrant'
-                    : `${form.previous_school_name || '—'} (${form.previous_class || 'N/A'})`}
-                </span>
-              </div>
-              <div>
-                <span className="text-[11px] font-bold uppercase text-slate-500 block">
-                  Admission Application Fee
-                </span>
-                <span className="font-semibold text-[#102B46]">
+
+              {/* Step 4 Summary */}
+              <div className="bg-[#F5F3ED] rounded-2xl border border-slate-200 p-4 space-y-2">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <span className="font-extrabold text-[#102B46]">
+                    4. Medical, Origin &amp; Fee
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setStep(4)}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-[#102B46] hover:text-[#D9B76A]"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Edit</span>
+                  </button>
+                </div>
+                <p>
+                  <strong>Origin:</strong>{' '}
+                  {[form.child_nationality, form.child_state_of_origin, form.child_lga]
+                    .filter(Boolean)
+                    .join(' / ') || 'Nigerian'}
+                </p>
+                <p>
+                  <strong>Health:</strong>{' '}
+                  {[form.blood_group, form.genotype, form.allergies]
+                    .filter(Boolean)
+                    .join(' • ') || 'No allergies or conditions stated'}
+                </p>
+                <p>
+                  <strong>Uploaded Supporting Docs:</strong> {supportingDocs.length} attached
+                </p>
+                <p>
+                  <strong>Application Fee:</strong>{' '}
                   {formattedFee
-                    ? `${formattedFee} (Verified via Paystack in Phase 5)`
+                    ? `${formattedFee} (Paystack verification in Phase 5)`
                     : 'Fee configuration pending General Administrator setup'}
-                </span>
+                </p>
               </div>
             </div>
+
+            {duplicateWarning && (
+              <div className="bg-amber-50 border border-amber-300 rounded-2xl p-4 space-y-3 text-xs sm:text-sm text-amber-950">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                  <span>{duplicateWarning}</span>
+                </div>
+                <label className="flex items-center gap-2.5 font-bold cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={duplicateConfirmed}
+                    onChange={(e) => setDuplicateConfirmed(e.target.checked)}
+                    className="rounded border-amber-400 text-[#102B46]"
+                  />
+                  <span>Yes, submit this additional application intentionally</span>
+                </label>
+              </div>
+            )}
 
             <div className="border border-slate-300 rounded-2xl p-5 space-y-4">
               <label className="flex items-start gap-3 cursor-pointer">
@@ -949,11 +1459,10 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   className="mt-1 rounded border-slate-300 text-[#102B46] focus:ring-[#102B46]"
                 />
                 <span className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-                  I hereby declare that all details submitted for this admission application are
-                  accurate and complete. I understand that after completing application fee
-                  payment verification, I must download, print, sign, and physically submit the
-                  official A4 application form with supporting documents at Father Abraham Children
-                  Academy.
+                  I confirm that all information supplied in this admission application is accurate
+                  and complete. I understand that after completing application fee payment
+                  verification, I must print, sign, and physically submit the official A4 form with
+                  original supporting documents at Father Abraham Children Academy.
                 </span>
               </label>
 
@@ -966,7 +1475,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   value={form.declaration_signer_name}
                   onChange={(e) => updateField('declaration_signer_name', e.target.value)}
                   placeholder="Type your full name"
-                  className="w-full sm:max-w-md rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
+                  className="w-full min-h-[44px] sm:max-w-md rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:border-[#102B46] focus:outline-none"
                 />
               </div>
             </div>
@@ -975,7 +1484,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
 
         {/* Action Footer */}
         <div className="pt-5 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {step > 1 && (
               <button
                 type="button"
@@ -984,7 +1493,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
                   setStep((s) => Math.max(1, s - 1));
                 }}
                 disabled={isSubmitting}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs sm:text-sm"
+                className="inline-flex items-center gap-1.5 px-4 min-h-[44px] rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs sm:text-sm"
               >
                 <ArrowLeft className="w-4 h-4" />
                 <span>Previous</span>
@@ -995,7 +1504,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
               type="button"
               onClick={() => void handleDraftSave()}
               disabled={isSubmitting}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-[#102B46]/30 bg-[#F5F3ED] hover:bg-[#e8e3d6] text-[#102B46] font-bold text-xs sm:text-sm disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-4 min-h-[44px] rounded-xl border border-[#102B46]/30 bg-[#F5F3ED] hover:bg-[#e8e3d6] text-[#102B46] font-bold text-xs sm:text-sm disabled:opacity-50"
             >
               {isSubmitting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -1011,7 +1520,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
               <button
                 type="button"
                 onClick={handleNextStep}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-[#102B46] hover:bg-[#091C30] text-white font-bold text-sm"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 min-h-[44px] rounded-xl bg-[#102B46] hover:bg-[#091C30] text-white font-bold text-sm"
               >
                 <span>Continue</span>
                 <ArrowRight className="w-4 h-4 text-[#D9B76A]" />
@@ -1020,7 +1529,7 @@ export const ParentApplicationForm: React.FC<ParentApplicationFormProps> = ({
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#15803D] hover:bg-emerald-800 text-white font-bold text-sm shadow-sm disabled:opacity-50"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 min-h-[44px] rounded-xl bg-[#15803D] hover:bg-emerald-800 text-white font-bold text-sm shadow-sm disabled:opacity-50"
               >
                 {isSubmitting ? (
                   <Loader2 className="w-4 h-4 animate-spin" />

@@ -4,6 +4,7 @@ import { verifyToken } from '@clerk/backend';
 export interface VerifiedCallerContext {
   clerkUserId: string;
   profileId: string;
+  email: string | null;
   staffId: string | null;
   roles: string[];
   permissions: string[];
@@ -82,7 +83,7 @@ export async function resolveVerifiedCaller(
 ): Promise<VerifiedCallerContext | null> {
   const { data: profile, error: profileErr } = await supabase
     .from('profiles')
-    .select('id, account_status')
+    .select('id, email, account_status')
     .eq('clerk_user_id', clerkUserId)
     .maybeSingle();
 
@@ -141,6 +142,7 @@ export async function resolveVerifiedCaller(
   return {
     clerkUserId,
     profileId: profile.id,
+    email: typeof profile.email === 'string' ? profile.email : null,
     staffId: staff?.id ?? null,
     roles,
     permissions: Array.from(permsSet),

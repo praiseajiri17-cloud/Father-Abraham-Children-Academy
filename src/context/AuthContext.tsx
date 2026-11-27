@@ -24,6 +24,7 @@ const DEFAULT_AUTHORIZATION_STATE: AuthorizationState = {
   permissions: [],
   verificationSource: isSupabaseConfigured() ? 'supabase_unconfigured' : 'unconnected_phase_2',
   verificationError: null,
+  diagnosticError: null,
 };
 
 interface InternalAuthBridgeValue extends AppAuthContextValue {
@@ -89,6 +90,17 @@ function isValidPublishableKey(key: string | undefined): key is string {
   return /^pk_(test|live)_[A-Za-z0-9_-]{10,}$/.test(trimmed);
 }
 
+function formatDiagnosticError(rawMsg: string): string {
+  const lower = rawMsg.toLowerCase();
+  if (lower.includes('no suitable key') || lower.includes('wrong key type') || lower.includes('pgrst301')) {
+    return 'Supabase rejected the Clerk session JWT ("No suitable key or wrong key type"). Enable Clerk as a Third-Party Auth provider in Supabase Dashboard -> Authentication -> Third-Party Auth using your Clerk domain, and activate the Supabase integration in Clerk Dashboard.';
+  }
+  if (lower.includes('permission denied') || lower.includes('ensure_parent_onboarding') || lower.includes('pgrst205')) {
+    return `Database privileges or schema objects are pending initialization (${rawMsg}).`;
+  }
+  return rawMsg;
+}
+
 const ClerkStateBridge: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isLoaded, isSignedIn, getToken, signOut: clerkSignOut } = useAuth();
   const { user } = useUser();
@@ -136,16 +148,38 @@ const ClerkStateBridge: React.FC<{ children: React.ReactNode }> = ({ children })
         allRoles: [],
         permissions: [],
         verificationSource: 'supabase_unconfigured',
-        verificationError:
-          'Supabase environment variables (VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY) are not configured yet.',
+        verificationError: 'Portal access verification is currently unavailable.',
+        diagnosticError: 'Supabase public client configuration is missing.',
       });
       return;
     }
 
-    setAuthorization((prev) => ({ ...prev, isChecking: true, verificationError: null }));
+    setAuthorization((prev) => ({
+      ...prev,
+      isChecking: true,
+      verificationError: null,
+      diagnosticError: null,
+    }));
 
     try {
-      // 1. Lookup profile in Supabase
+      // Ensure Clerk session token is actually issued before hitting Supabase PostgREST
+      const activeToken = await getToken();
+      if (!activeToken) {
+        setAuthorization({
+          isVerified: false,
+          isChecking: false,
+          profileId: null,
+          verifiedRole: null,
+          allRoles: [],
+          permissions: [],
+          verificationSource: 'supabase_verified',
+          verificationError: 'Your session is still initializing. Please try refreshing.',
+          diagnosticError: 'Clerk getToken() returned null for an active session.',
+        });
+        return;
+      }
+
+      // 1. Lookup authoritative profile in Supabase (matching Clerk user ID)
       let { data: profile, error: profileErr } = await supabaseClient
         .from('profiles')
         .select('id, account_status')
@@ -204,8 +238,11 @@ const ClerkStateBridge: React.FC<{ children: React.ReactNode }> = ({ children })
           verificationSource: 'supabase_verified',
           verificationError:
             profile?.account_status && profile.account_status !== 'active'
-              ? `Account status is "${profile.account_status}". Contact administration.`
-              : 'User profile could not be resolved in Supabase.',
+              ? 'Your school portal account is currently inactive. Please contact school administration.'
+              : 'Your account verification is pending.',
+          diagnosticError: profile?.account_status
+            ? `Profile status: ${profile.account_status}`
+            : 'Profile row could not be resolved.',
         });
         return;
       }
@@ -285,10 +322,18 @@ const ClerkStateBridge: React.FC<{ children: React.ReactNode }> = ({ children })
         allRoles,
         permissions: Array.from(permsSet),
         verificationSource: 'supabase_verified',
-        verificationError: null,
+        verificationError:
+          allRoles.length === 0 ? 'No active institutional role is assigned to this account yet.' : null,
+        diagnosticError: null,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Authorization lookup failed.';
+      const rawMsg = err instanceof Error ? err.message : 'Authorization lookup failed.';
+      const diagnostic = formatDiagnosticError(rawMsg);
+
+      if (import.meta.env.DEV) {
+        console.warn('[Portal Authorization Diagnostic]:', diagnostic);
+      }
+
       setAuthorization({
         isVerified: false,
         isChecking: false,
@@ -297,10 +342,12 @@ const ClerkStateBridge: React.FC<{ children: React.ReactNode }> = ({ children })
         allRoles: [],
         permissions: [],
         verificationSource: 'supabase_verified',
-        verificationError: msg,
+        verificationError:
+          'Your account sign-in succeeded, and portal access verification is currently pending.',
+        diagnosticError: diagnostic,
       });
     }
-  }, [isLoaded, isSignedIn, normalizedUser, supabaseConfigured, supabaseClient]);
+  }, [isLoaded, isSignedIn, normalizedUser, supabaseConfigured, supabaseClient, getToken]);
 
   useEffect(() => {
     void resolveAuthorization();
@@ -308,9 +355,9 @@ const ClerkStateBridge: React.FC<{ children: React.ReactNode }> = ({ children })
 
   const handleSignOut = useCallback(async () => {
     if (clerkSignOut) {
-      await clerkSignOut({ redirectUrl: '/portal/login' });
+      await clerkSignOut({ redirectUrl: '/portal' });
     } else if (clerk) {
-      await clerk.signOut({ redirectUrl: '/portal/login' });
+      await clerk.signOut({ redirectUrl: '/portal' });
     }
   }, [clerkSignOut, clerk]);
 
@@ -362,7 +409,7 @@ export const AppAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
       isSignedIn: false,
       user: null,
       authError: publishableKey
-        ? 'The configured VITE_CLERK_PUBLISHABLE_KEY does not match the expected Clerk format (pk_test_... or pk_live_...).'
+        ? 'Portal authentication configuration is incomplete.'
         : null,
       authorization: DEFAULT_AUTHORIZATION_STATE,
       refreshAuthorization: async () => {},
@@ -410,7 +457,7 @@ export const AppAuthProvider: React.FC<{ children: React.ReactNode }> = ({ child
         signUpUrl="/portal/register"
         signInFallbackRedirectUrl="/portal"
         signUpFallbackRedirectUrl="/portal"
-        afterSignOutUrl="/portal/login"
+        afterSignOutUrl="/portal"
         appearance={academyClerkAppearance}
       >
         <ClerkStateBridge>{children}</ClerkStateBridge>

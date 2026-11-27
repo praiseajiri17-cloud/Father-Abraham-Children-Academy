@@ -1,5 +1,6 @@
 import React from 'react';
 import { SCHOOL_INFO } from '../../constants/data';
+import { usePublicSchoolSettings } from '../../hooks/usePublicSchoolSettings';
 import {
   AdmissionApplicationExpanded,
   PHYSICAL_DOCUMENT_CHECKLIST_ITEMS,
@@ -8,15 +9,62 @@ import { formatNairaFromKobo } from '../../services/admissionsService';
 
 interface OfficialAdmissionPrintSheetProps {
   application: AdmissionApplicationExpanded | null;
+  passportImageUrl?: string | null;
 }
 
+const SchoolCrestSvg: React.FC<{ className?: string }> = ({ className = 'w-12 h-14' }) => (
+  <svg
+    viewBox="0 0 64 76"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    className={className}
+    aria-hidden="true"
+  >
+    {/* Shield Base matching Logo.tsx */}
+    <path
+      d="M6 6H58V40C58 55.5 32 68 32 68C32 68 6 55.5 6 40V6Z"
+      fill="#102B46"
+      stroke="#D9B76A"
+      strokeWidth="3.5"
+    />
+    {/* Torch Flame at top */}
+    <path
+      d="M32 13C34.5 16.2 36 18.4 36 20.8C36 23 34.2 24.8 32 24.8C29.8 24.8 28 23 28 20.8C28 18.4 29.5 16.2 32 13Z"
+      fill="#D9B76A"
+    />
+    {/* Open Book */}
+    <path
+      d="M17 30C21.5 30 27.5 31.2 32 34C36.5 31.2 42.5 30 47 30V45C42.5 45 36.5 46.2 32 49C27.5 46.2 21.5 45 17 45V30Z"
+      stroke="#FFFFFF"
+      strokeWidth="2.5"
+      strokeLinejoin="round"
+    />
+    <line x1="32" y1="34" x2="32" y2="49" stroke="#D9B76A" strokeWidth="2" />
+    {/* Gold Star/Award */}
+    <circle cx="32" cy="56" r="3" fill="#D9B76A" />
+    {/* Gold Bottom Diamond */}
+    <rect
+      x="28"
+      y="65"
+      width="8"
+      height="8"
+      transform="rotate(45 32 69)"
+      fill="#D9B76A"
+      stroke="#102B46"
+      strokeWidth="1.5"
+    />
+  </svg>
+);
+
 /**
- * Clean A4 Print Representation rendered off-screen until print mode is activated
- * (or previewed in a dedicated modal). Strictly gated to payment_status === 'paid'.
+ * Clean A4 Print Representation rendered off-screen until print mode is activated.
+ * Strictly gated to payment_status === 'paid'.
  */
 export const OfficialAdmissionPrintSheet: React.FC<OfficialAdmissionPrintSheetProps> = ({
   application,
+  passportImageUrl,
 }) => {
+  const { contactInfo } = usePublicSchoolSettings();
   if (!application || application.payment_status !== 'paid') {
     return null;
   }
@@ -32,9 +80,8 @@ export const OfficialAdmissionPrintSheet: React.FC<OfficialAdmissionPrintSheetPr
       {/* Institutional Header */}
       <div className="bg-[#102B46] text-white p-4 border-b-4 border-[#D9B76A] flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-14 h-14 bg-white text-[#102B46] rounded-md flex flex-col items-center justify-center font-extrabold text-[10px] shrink-0">
-            <span>FACA</span>
-            <span className="text-[7px] font-semibold tracking-widest">CREST</span>
+          <div className="bg-white/5 p-1 rounded-lg shrink-0">
+            <SchoolCrestSvg className="w-12 h-14" />
           </div>
           <div>
             <h1 className="text-base font-extrabold tracking-wide uppercase font-['Manrope']">
@@ -43,10 +90,19 @@ export const OfficialAdmissionPrintSheet: React.FC<OfficialAdmissionPrintSheetPr
             <p className="text-[10px] font-bold text-[#D9B76A] tracking-widest">
               {SCHOOL_INFO.levels}
             </p>
-            <p className="text-[10px] text-slate-200 mt-0.5">{SCHOOL_INFO.address}</p>
-            <p className="text-[10px] text-slate-200">
-              Tel: {SCHOOL_INFO.phone} | Email: {SCHOOL_INFO.email}
-            </p>
+            {contactInfo?.configured && contactInfo.address && (
+              <p className="text-[10px] text-slate-200 mt-0.5">{contactInfo.address}</p>
+            )}
+            {contactInfo?.configured && (contactInfo.phone || contactInfo.email) && (
+              <p className="text-[10px] text-slate-200">
+                {[
+                  contactInfo.phone ? `Tel: ${contactInfo.phone}` : '',
+                  contactInfo.email ? `Email: ${contactInfo.email}` : '',
+                ]
+                  .filter(Boolean)
+                  .join(' | ')}
+              </p>
+            )}
           </div>
         </div>
         <div className="text-right text-[10px]">
@@ -90,17 +146,27 @@ export const OfficialAdmissionPrintSheet: React.FC<OfficialAdmissionPrintSheetPr
           </div>
         </div>
 
-        <div className="w-[34mm] h-[42mm] border-2 border-[#102B46] flex flex-col items-center justify-center text-center text-[9px] font-bold text-slate-500 shrink-0">
-          <span>AFFIX RECENT</span>
-          <span>PASSPORT</span>
-          <span>PHOTOGRAPH</span>
-          <span className="font-normal text-[8px] mt-1">(35mm x 45mm)</span>
+        <div className="w-[34mm] h-[42mm] border-2 border-[#102B46] flex flex-col items-center justify-center text-center text-[9px] font-bold text-slate-500 shrink-0 overflow-hidden bg-slate-50">
+          {passportImageUrl ? (
+            <img
+              src={passportImageUrl}
+              alt={`${application.child_first_name} ${application.child_last_name} passport`}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <>
+              <span>AFFIX RECENT</span>
+              <span>PASSPORT</span>
+              <span>PHOTOGRAPH</span>
+              <span className="font-normal text-[8px] mt-1">(35mm x 45mm)</span>
+            </>
+          )}
         </div>
       </div>
 
       {/* Section A */}
       <div className="mt-3 print-avoid-break">
-        <div className="bg-[#F5F3ED] border border-[#102B46] border-l-4 px-2 py-1 font-bold text-[11px] uppercase text-[#102B46]">
+        <div className="bg-[#F5F3ED] border border-[#102B46] px-2.5 py-1 font-bold text-[11px] uppercase text-[#102B46]">
           Section A — Child / Applicant Information
         </div>
         <div className="grid grid-cols-3 border-x border-b border-slate-300">
@@ -143,7 +209,7 @@ export const OfficialAdmissionPrintSheet: React.FC<OfficialAdmissionPrintSheetPr
 
       {/* Section B */}
       <div className="mt-3 print-avoid-break">
-        <div className="bg-[#F5F3ED] border border-[#102B46] border-l-4 px-2 py-1 font-bold text-[11px] uppercase text-[#102B46]">
+        <div className="bg-[#F5F3ED] border border-[#102B46] px-2.5 py-1 font-bold text-[11px] uppercase text-[#102B46]">
           Section B — Parent / Guardian & Emergency Contact
         </div>
         <div className="grid grid-cols-3 border-x border-b border-slate-300">
@@ -196,7 +262,7 @@ export const OfficialAdmissionPrintSheet: React.FC<OfficialAdmissionPrintSheetPr
 
       {/* Section C & D */}
       <div className="mt-3 print-avoid-break">
-        <div className="bg-[#F5F3ED] border border-[#102B46] border-l-4 px-2 py-1 font-bold text-[11px] uppercase text-[#102B46]">
+        <div className="bg-[#F5F3ED] border border-[#102B46] px-2.5 py-1 font-bold text-[11px] uppercase text-[#102B46]">
           Section C & D — Previous Schooling & Health Information
         </div>
         <div className="grid grid-cols-2 border-x border-b border-slate-300">
@@ -215,6 +281,23 @@ export const OfficialAdmissionPrintSheet: React.FC<OfficialAdmissionPrintSheetPr
             </span>
           </div>
         </div>
+        {!application.is_first_time_schooling &&
+          (application.previous_school_address || application.reason_for_leaving) && (
+            <div className="grid grid-cols-2 border-x border-b border-slate-300">
+              <div className="p-1.5 border-r border-slate-300">
+                <span className="text-[9px] text-slate-500 uppercase block">
+                  Previous School Address
+                </span>
+                <span>{application.previous_school_address || '—'}</span>
+              </div>
+              <div className="p-1.5">
+                <span className="text-[9px] text-slate-500 uppercase block">
+                  Reason for Leaving
+                </span>
+                <span>{application.reason_for_leaving || '—'}</span>
+              </div>
+            </div>
+          )}
         <div className="grid grid-cols-3 border-x border-b border-slate-300">
           <div className="p-1.5 border-r border-slate-300">
             <span className="text-[9px] text-slate-500 uppercase block">Blood Group / Genotype</span>

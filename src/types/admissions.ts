@@ -2,6 +2,8 @@ import {
   ApplicationStatus,
   DbAcademicSession,
   DbAdmissionApplication,
+  DbAdmissionDocument,
+  DbApplicationPayment,
   DbClassLevel,
   DbSchoolSection,
   PaymentStatus,
@@ -88,6 +90,28 @@ export interface AdmissionApplicationExpanded extends DbAdmissionApplication {
   class_levels?: Pick<DbClassLevel, 'id' | 'code' | 'name'> | null;
   academic_sessions?: Pick<DbAcademicSession, 'id' | 'name' | 'is_current'> | null;
   medical_details?: AdmissionMedicalDetails | null;
+  documents?: DbAdmissionDocument[];
+}
+
+export interface ApplicationPaymentWithChild extends DbApplicationPayment {
+  admission_applications?: {
+    id: string;
+    application_reference: string;
+    child_first_name: string;
+    child_last_name: string;
+  } | null;
+}
+
+export interface ParentWorkspaceProfile {
+  profileId: string;
+  parentId: string | null;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  alternate_phone: string;
+  occupation: string;
+  residential_address: string;
 }
 
 export interface AdmissionFormInput {
@@ -104,6 +128,7 @@ export interface AdmissionFormInput {
   intended_section_id: string;
   intended_class_level_id: string;
   intended_session_id: string;
+  passport_photo_path: string;
   // Section B: Parent / Guardian Information
   parent_full_name: string;
   parent_relationship: string;
@@ -120,6 +145,7 @@ export interface AdmissionFormInput {
   previous_school_name: string;
   previous_class: string;
   previous_school_address: string;
+  reason_for_leaving: string;
   // Section D: Additional & Medical Information
   additional_details: string;
   blood_group: string;
@@ -190,7 +216,7 @@ export const APPLICATION_STATUS_META: Record<
     description: 'Currently being reviewed by the Admissions Office.',
   },
   correction_requested: {
-    label: 'Correction Requested',
+    label: 'Correction Required',
     badgeClass: 'bg-orange-50 text-orange-800 border-orange-200',
     description: 'Please inspect the admissions officer note, update details, and resubmit.',
   },
@@ -211,19 +237,19 @@ export const PAYMENT_STATUS_META: Record<
   { label: string; badgeClass: string }
 > = {
   unpaid: {
-    label: 'Unpaid',
+    label: 'Awaiting Application Payment',
     badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
   },
   pending: {
-    label: 'Verification Pending',
+    label: 'Payment Verification Pending',
     badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
   },
   paid: {
-    label: 'Paid (Verified)',
+    label: 'Payment Confirmed',
     badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
   },
   failed: {
-    label: 'Failed',
+    label: 'Payment Failed',
     badgeClass: 'bg-red-50 text-red-800 border-red-200',
   },
   refunded: {
@@ -237,11 +263,11 @@ export const PHYSICAL_DOCS_STATUS_META: Record<
   { label: string; badgeClass: string }
 > = {
   not_submitted: {
-    label: 'Not Yet Submitted',
+    label: 'Awaiting Physical Documents',
     badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
   },
   received: {
-    label: 'Received at School',
+    label: 'Documents Received',
     badgeClass: 'bg-sky-50 text-sky-800 border-sky-200',
   },
   under_review: {
